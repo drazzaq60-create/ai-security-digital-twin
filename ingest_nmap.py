@@ -5,7 +5,7 @@
 import xml.etree.ElementTree as ET
 
 
-def parse_nmap(path):
+def parse_nmap(path="sample_data/scan.xml"):
     """Parse an Nmap XML file into a list of live hosts, each with its open services."""
     root = ET.parse(path).getroot()
     hosts = []

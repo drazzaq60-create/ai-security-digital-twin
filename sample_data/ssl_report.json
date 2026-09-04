@@ -1,0 +1,7 @@
+{
+  "web01": [
+    {"issue": "TLS 1.0 / 1.1 still enabled (deprecated)", "severity": "Medium"},
+    {"issue": "Self-signed certificate", "severity": "Low"},
+    {"issue": "Weak cipher suite (RC4) offered", "severity": "Medium"}
+  ]
+}
