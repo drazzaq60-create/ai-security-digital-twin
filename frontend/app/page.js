@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo } from "react";
 
 // Configurable so a deployed build can point at a real backend, not the visitor's own PC.
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -13,6 +13,10 @@ export default function Home() {
   const [reports, setReports] = useState([]);
   const [correlation, setCorrelation] = useState(null);
   const [correlationError, setCorrelationError] = useState("");
+  const [graph, setGraph] = useState(null);
+  const [graphError, setGraphError] = useState("");
+  const [sim, setSim] = useState(null);
+  const [simCut, setSimCut] = useState(null);
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef(null);
@@ -33,6 +37,7 @@ export default function Home() {
     if (files.length === 0) { setError("Add at least one report file."); return; }
     setError(""); setRunning(true); setLog([]); setReports([]);
     setCorrelation(null); setCorrelationError("");
+    setGraph(null); setGraphError(""); setSim(null); setSimCut(null);
     const collected = [];
     const allFindings = [];
 
@@ -124,6 +129,29 @@ export default function Home() {
         logLine("Correlation skipped — needs 2+ reports with findings", "info");
       }
 
+      // Build the attack-surface graph from every finding gathered (deterministic backend).
+      if (allFindings.length > 0) {
+        logLine("Building attack-surface graph…");
+        try {
+          const gRes = await fetch(`${API_URL}/graph`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ findings: allFindings }),
+          });
+          if (!gRes.ok) throw new Error(`graph failed (${gRes.status})`);
+          const gData = await gRes.json();
+          setGraph(gData);
+          logLine(
+            `✓ Attack surface: ${Math.max((gData.nodes?.length || 1) - 1, 0)} host(s), ` +
+            `${gData.paths?.length || 0} attack path(s) to ${gData.reachable_critical?.length || 0} critical asset(s)`,
+            "ok"
+          );
+        } catch (e) {
+          setGraphError((e && e.message) || "graph error");
+          logLine(`✗ Attack-surface graph failed: ${(e && e.message) || "error"}`, "err");
+        }
+      }
+
       const failed = collected.filter((r) => r.status === "failed").length;
       logLine(
         failed > 0 ? `Analysis finished with ${failed} failed report(s)` : "Analysis finished",
@@ -137,6 +165,23 @@ export default function Home() {
       setRunning(false);
     }
   }
+
+  async function simulateCut(cut) {
+    if (!graph) return;
+    setSimCut(cut); setSim(null);
+    try {
+      const r = await fetch(`${API_URL}/simulate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nodes: graph.nodes, edges: graph.edges, cut }),
+      });
+      if (!r.ok) throw new Error(`simulate failed (${r.status})`);
+      setSim(await r.json());
+    } catch (e) {
+      setSim({ error: (e && e.message) || "simulate error" });
+    }
+  }
+  function clearSim() { setSim(null); setSimCut(null); }
 
   const okReports = reports.filter((r) => r.status !== "failed");
   const totalFindings = reports.reduce((n, r) => n + (r.findings?.length || 0), 0);
@@ -265,6 +310,26 @@ export default function Home() {
           </div>
         )}
 
+        {/* Attack-surface graph + what-if simulation — the Digital Twin core */}
+        {graphError && (
+          <div className="panel">
+            <div className="panel-head">🕸️ Attack Surface</div>
+            <div className="fail-box" style={{ margin: 14 }}>⚠ Graph build failed: {graphError}. Re-run to retry.</div>
+          </div>
+        )}
+        {graph && graph.nodes && graph.nodes.length > 1 && (
+          <div className="panel">
+            <div className="panel-head">🕸️ Attack Surface & What-If Simulation</div>
+            <AttackSurface
+              graph={graph}
+              sim={sim}
+              simCut={simCut}
+              onSimulate={simulateCut}
+              onClear={clearSim}
+            />
+          </div>
+        )}
+
         {/* Per-report findings + that report's false positives */}
         {reports.length > 0 && (
           <div className="panel">
@@ -332,6 +397,192 @@ function Corr({ title, items, cls }) {
           <p>{it.why}</p>
         </div>
       ))}
+    </div>
+  );
+}
+
+// Layered left-to-right layout: column = hop distance from Internet, spread vertically.
+function computeLayout(graph) {
+  const NW = 130, NH = 38, COLW = 185, ROWH = 74, PADX = 74, PADY = 46;
+  const adj = {};
+  graph.edges.forEach((e) => { (adj[e.source] = adj[e.source] || []).push(e.target); });
+
+  const layer = { Internet: 0 };
+  let frontier = ["Internet"];
+  while (frontier.length) {
+    const next = [];
+    frontier.forEach((u) => (adj[u] || []).forEach((v) => {
+      if (layer[v] === undefined) { layer[v] = layer[u] + 1; next.push(v); }
+    }));
+    frontier = next;
+  }
+  let maxLayer = 0;
+  graph.nodes.forEach((n) => { if (layer[n.id] !== undefined) maxLayer = Math.max(maxLayer, layer[n.id]); });
+  const orphanLayer = maxLayer + 1;
+
+  const cols = {};
+  graph.nodes.forEach((n) => {
+    const L = layer[n.id] === undefined ? orphanLayer : layer[n.id];
+    (cols[L] = cols[L] || []).push(n.id);
+  });
+  const colKeys = Object.keys(cols).map(Number);
+  const maxRows = Math.max(...colKeys.map((k) => cols[k].length), 1);
+
+  const pos = {};
+  colKeys.forEach((L) => {
+    const ids = cols[L];
+    const colH = (ids.length - 1) * ROWH;
+    const startY = PADY + ((maxRows - 1) * ROWH) / 2 - colH / 2;
+    ids.forEach((id, i) => { pos[id] = { x: PADX + L * COLW, y: startY + i * ROWH }; });
+  });
+  const width = PADX * 2 + Math.max(...colKeys, 0) * COLW + NW;
+  const height = PADY * 2 + (maxRows - 1) * ROWH + NH;
+  return { pos, width, height, NW, NH };
+}
+
+function sevColor(s) {
+  s = (s || "").toLowerCase();
+  if (s === "critical" || s === "high") return "#ef4444";
+  if (s === "medium") return "#f59e0b";
+  return "#3b82f6";
+}
+
+function AttackSurface({ graph, sim, simCut, onSimulate, onClear }) {
+  const { pos, width, height, NW, NH } = useMemo(() => computeLayout(graph), [graph]);
+  const reachable = new Set(graph.reachable_critical || []);
+  const cutKey = simCut ? `${simCut[0]}->${simCut[1]}` : null;
+
+  let verdict = null;
+  if (sim && !sim.error) {
+    const removed = (sim.before.paths?.length || 0) - (sim.after.paths?.length || 0);
+    const wasReachable = new Set(sim.before.reachable_critical || []);
+    const stillReachable = new Set(sim.after.reachable_critical || []);
+    const protectedAssets = [...wasReachable].filter((a) => !stillReachable.has(a));
+    verdict = { removed, protectedAssets, stillReachable: [...stillReachable] };
+  }
+
+  return (
+    <div>
+      <div className="assume">
+        <b>⚠ Model assumptions</b> — topology is <i>inferred</i>, not proven by the reports. The score
+        is a heuristic <b>priority</b> (asset value × path exploit-likelihood), not a breach probability.
+        Longer chains score lower because each hop multiplies in an independent exploit likelihood.
+        <ul>{(graph.assumptions || []).map((a, i) => <li key={i}>{a}</li>)}</ul>
+      </div>
+
+      <div className="graph-scroll">
+        <svg width={width} height={height} className="graph-svg" role="img"
+          aria-label="Attack-surface graph: Internet on the left, critical assets on the right">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#64748b" />
+            </marker>
+          </defs>
+          {graph.edges.map((e, i) => {
+            const a = pos[e.source], b = pos[e.target];
+            if (!a || !b) return null;
+            const isCut = cutKey === `${e.source}->${e.target}`;
+            const x1 = a.x + NW / 2, y1 = a.y, x2 = b.x - NW / 2, y2 = b.y;
+            return (
+              <g key={i} className="edge" style={{ cursor: "pointer" }} onClick={() => onSimulate([e.source, e.target])}>
+                <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="transparent" strokeWidth="16" />
+                <line x1={x1} y1={y1} x2={x2} y2={y2}
+                  stroke={isCut ? "#475569" : sevColor(e.severity)}
+                  strokeWidth={isCut ? 1.5 : 2.5}
+                  strokeDasharray={isCut ? "5 5" : "0"}
+                  markerEnd="url(#arrow)" />
+                <title>{e.source} → {e.target} · {e.severity} · via {e.via}{e.assumed ? " · assumed" : ""}{isCut ? " · CUT" : ""} — click to simulate patching this</title>
+              </g>
+            );
+          })}
+          {graph.nodes.map((n, i) => {
+            const p = pos[n.id]; if (!p) return null;
+            const hit = reachable.has(n.id);
+            return (
+              <g key={i} transform={`translate(${p.x - NW / 2},${p.y - NH / 2})`}>
+                <rect width={NW} height={NH} rx="9" className={`gnode k-${n.kind} ${hit ? "hit" : ""}`} />
+                <text x={NW / 2} y={NH / 2 + 4} textAnchor="middle" className="gnode-t">
+                  {n.id === "Internet" ? "🌐 Internet" : n.id}
+                </text>
+                {n.criticality > 0 && (
+                  <text x={NW - 8} y={13} textAnchor="end" className="gnode-c">C{n.criticality}</text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+
+      <div className="paths">
+        <div className="paths-head">
+          Attack paths to critical assets <span className="badge">{graph.paths.length}</span>
+        </div>
+        {graph.paths.length === 0 && (
+          <p className="muted">No path from the Internet to a critical asset under the current
+            (assumed) topology. Either nothing high-value is exposed, or the reports don't describe
+            a reachable chain.</p>
+        )}
+        {graph.paths.map((pth, i) => (
+          <div key={i} className="path-row">
+            <div className="path-line">
+              {pth.path.map((h, j) => (
+                <span key={j} className="hop">
+                  {h === "Internet" ? "🌐 Internet" : h}
+                  {j < pth.path.length - 1 && <span className="arr"> → </span>}
+                </span>
+              ))}
+            </div>
+            <div className="path-meta">
+              <span className="pri">priority {pth.priority}</span>
+              <span>likelihood {pth.likelihood}%</span>
+              <span>target crit {pth.criticality}/5</span>
+            </div>
+            <div className="path-cuts">
+              {pth.steps.map((s, j) => (
+                <button key={j} className="cutbtn" onClick={() => onSimulate([s.from, s.to])}>
+                  ✂ patch {s.from === "Internet" ? "🌐" : s.from} → {s.to}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {sim && (
+        <div className="simbox">
+          {sim.error ? (
+            <div className="fail-box">Simulation failed: {sim.error}</div>
+          ) : (
+            <>
+              <div className="sim-head">
+                🧪 What-if: patch <b>{simCut[0] === "Internet" ? "🌐 Internet" : simCut[0]} → {simCut[1]}</b>
+                <button className="linkbtn" onClick={onClear}>clear</button>
+              </div>
+              <div className="sim-cols">
+                <div className="sim-side">
+                  <div className="sim-label">Before</div>
+                  <div>Reachable critical assets: <b>{sim.before.reachable_critical.length ? sim.before.reachable_critical.join(", ") : "none"}</b></div>
+                  <div>Attack paths: <b>{sim.before.paths.length}</b></div>
+                </div>
+                <div className="sim-side after">
+                  <div className="sim-label">After</div>
+                  <div>Reachable critical assets: <b>{sim.after.reachable_critical.length ? sim.after.reachable_critical.join(", ") : "none"}</b></div>
+                  <div>Attack paths: <b>{sim.after.paths.length}</b></div>
+                </div>
+              </div>
+              {verdict && (
+                <div className={`sim-verdict ${verdict.protectedAssets.length ? "good" : ""}`}>
+                  {verdict.protectedAssets.length > 0
+                    ? `✓ This fix protects ${verdict.protectedAssets.join(", ")} — no longer reachable from the Internet. Removes ${verdict.removed} attack path(s).`
+                    : verdict.removed > 0
+                      ? `Removes ${verdict.removed} attack path(s), but critical assets stay reachable via other routes${verdict.stillReachable.length ? " (" + verdict.stillReachable.join(", ") + ")" : ""}. Defence-in-depth needed.`
+                      : "No change — this edge isn't on any current attack path."}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

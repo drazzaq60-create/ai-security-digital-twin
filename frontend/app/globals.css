@@ -116,6 +116,49 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
 .fail-box { margin: 10px 0 4px; background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3);
   color: #fca5a5; padding: 10px 14px; border-radius: 8px; font-size: 13px; }
 .fail-inline { color: #fca5a5; font-size: 12.5px; margin: 2px 0 6px; }
+
+/* ---- Attack surface graph ---- */
+.assume { margin: 14px 16px 0; padding: 11px 14px; border-radius: 10px; font-size: 12.5px; line-height: 1.5;
+  background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.28); color: #fcd34d; }
+.assume ul { margin: 6px 0 0; padding-left: 18px; color: #e2c98f; }
+.assume li { padding: 1px 0; }
+.assume b, .assume i { color: #fde68a; }
+
+.graph-scroll { overflow-x: auto; padding: 16px; }
+.graph-svg { display: block; }
+.edge:hover line:last-of-type { stroke-width: 4; }
+.gnode { fill: var(--panel-2); stroke: var(--border); stroke-width: 1.5; }
+.gnode.k-internet { fill: #1e293b; stroke: #475569; }
+.gnode.k-web { fill: rgba(59,130,246,.14); stroke: rgba(59,130,246,.5); }
+.gnode.k-database { fill: rgba(239,68,68,.14); stroke: rgba(239,68,68,.55); }
+.gnode.k-host { fill: rgba(148,163,184,.1); stroke: rgba(148,163,184,.4); }
+.gnode.hit { stroke: var(--red); stroke-width: 2.5; }
+.gnode-t { fill: var(--text); font-size: 12px; font-family: ui-monospace, monospace; font-weight: 600; }
+.gnode-c { fill: var(--muted); font-size: 9.5px; font-weight: 700; }
+
+.paths { padding: 4px 18px 16px; }
+.paths-head { font-weight: 700; font-size: 14px; margin: 6px 0 10px; }
+.path-row { border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin-bottom: 10px; background: var(--panel-2); }
+.path-line { font-family: ui-monospace, monospace; font-size: 13px; }
+.path-line .arr { color: var(--muted); }
+.path-meta { display: flex; gap: 14px; margin: 7px 0; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+.path-meta .pri { color: var(--mint-2); font-weight: 700; }
+.path-cuts { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 4px; }
+.cutbtn { background: rgba(16,185,129,.08); border: 1px solid rgba(16,185,129,.3); color: var(--mint-2);
+  border-radius: 7px; padding: 4px 9px; font-size: 11.5px; cursor: pointer; font-family: ui-monospace, monospace; }
+.cutbtn:hover { background: rgba(16,185,129,.18); }
+
+.simbox { margin: 0 18px 18px; border: 1px solid var(--border); border-radius: 12px; padding: 14px; background: var(--panel); }
+.sim-head { font-weight: 700; font-size: 14px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.linkbtn { margin-left: auto; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; text-decoration: underline; }
+.sim-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.sim-side { border: 1px solid var(--border); border-radius: 10px; padding: 11px 14px; font-size: 13px; line-height: 1.7; }
+.sim-side.after { border-color: rgba(16,185,129,.35); background: rgba(16,185,129,.04); }
+.sim-label { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin-bottom: 4px; }
+.sim-verdict { margin-top: 12px; padding: 10px 14px; border-radius: 10px; font-size: 13px;
+  background: var(--panel-2); border: 1px solid var(--border); }
+.sim-verdict.good { background: rgba(16,185,129,.1); border-color: rgba(16,185,129,.35); color: var(--mint-2); }
+@media (max-width: 720px) { .sim-cols { grid-template-columns: 1fr; } }
 .ftable { width: 100%; border-collapse: collapse; margin-top: 10px; }
 .ftable td { padding: 7px 6px; border-top: 1px solid var(--border); font-size: 13px; vertical-align: top; }
 .fname { width: 100%; }

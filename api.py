@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from universal_ingest import extract_findings
 from correlate import correlate
+from web_graph import build_web_graph, simulate_cut
 from llm import call_llm
 
 app = FastAPI(title="Sentinel Digital Twin API")
@@ -129,3 +130,26 @@ async def correlate_endpoint(body: Findings):
         if not isinstance(result.get(k), list):
             result[k] = []
     return {"correlation": result}
+
+
+@app.post("/graph")
+def graph_endpoint(body: Findings):
+    """Attack-surface graph built FROM the uploaded findings (deterministic, no LLM)."""
+    if not body.findings:
+        return {"nodes": [], "edges": [], "paths": [], "assumptions": [],
+                "reachable_critical": [], "critical_assets": []}
+    return build_web_graph(body.findings)
+
+
+class SimBody(BaseModel):
+    nodes: List[dict] = []
+    edges: List[dict] = []
+    cut: List[str] = []
+
+
+@app.post("/simulate")
+def simulate_endpoint(body: SimBody):
+    """What-if remediation: cut one (assumed) edge and recompute paths + reachability."""
+    if len(body.cut) != 2:
+        return {"error": "cut must be [source, target]"}
+    return simulate_cut(body.nodes, body.edges, body.cut)
