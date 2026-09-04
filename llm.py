@@ -9,11 +9,25 @@ from google.genai import types
 load_dotenv()
 
 # --- Chat models: rotate through these; each has its OWN separate free quota ---
+# Default order favours the more capable models (used for reasoning-heavy tasks
+# like correlation).
 GEMINI_MODELS = [
     "gemini-3.6-flash",
     "gemini-3.7-flash",
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
+]
+
+# Fast order: lightweight-first, for high-volume structured tasks (report parsing,
+# per-report fixes). The lite model is quicker and typically less throttled, so the
+# first attempt usually succeeds instead of waiting through the SDK's retry/backoff
+# on a busy heavier model.
+FAST_MODELS = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.6-flash",
+    "gemini-3.7-flash",
+    "gemini-3.5-flash",
     "gemini-2.5-flash",
 ]
 
@@ -27,10 +41,12 @@ _client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 _embed_model = None  # remembered once we find one that works
 
 
-def call_llm(system, user, temperature=0.1):
-    """Try each chat model in order; on any failure (rate limit, etc.) fall back to the next."""
+def call_llm(system, user, temperature=0.1, models=None):
+    """Try each chat model in order; on any failure (rate limit, etc.) fall back to the next.
+
+    Pass `models` (e.g. FAST_MODELS) to change the preference order per task."""
     last_error = None
-    for model in GEMINI_MODELS:
+    for model in (models or GEMINI_MODELS):
         try:
             resp = _client.models.generate_content(
                 model=model,

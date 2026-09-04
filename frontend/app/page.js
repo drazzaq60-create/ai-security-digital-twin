@@ -42,10 +42,14 @@ export default function Home() {
     const allFindings = [];
 
     try {
-      logLine(`Starting analysis of ${files.length} report(s)…`, "start");
+      logLine(`Starting analysis of ${files.length} report(s) in parallel…`, "start");
 
-      for (const f of files) {
-        // Each report is independent: one failure must NOT abort the whole run.
+      // Each report runs as an independent pipeline (extract -> fixes) CONCURRENTLY.
+      // One failure never aborts the others; the backend handles the parallel requests.
+      const results = new Array(files.length);
+      const commit = () => setReports(results.filter(Boolean));
+
+      await Promise.all(files.map(async (f, idx) => {
         const rep = {
           name: f.name, findings: [], fixes: [], false_positives: [],
           status: "ok", error: "", fixesFailed: false,
@@ -63,7 +67,7 @@ export default function Home() {
           if (eData.error) {
             rep.status = "failed"; rep.error = eData.error;
             logLine(`✗ ${rep.name}: ${eData.error}`, "err");
-            collected.push(rep); setReports([...collected]); continue;
+            results[idx] = rep; commit(); return;
           }
           rep.findings = eData.findings || [];
           if (rep.findings.length === 0) {
@@ -75,7 +79,7 @@ export default function Home() {
         } catch (e) {
           rep.status = "failed"; rep.error = (e && e.message) || "extract error";
           logLine(`✗ ${rep.name}: ${rep.error}`, "err");
-          collected.push(rep); setReports([...collected]); continue;
+          results[idx] = rep; commit(); return;
         }
 
         // Per-report fixes — only if this report actually produced findings.
@@ -98,8 +102,10 @@ export default function Home() {
           allFindings.push(...rep.findings);
         }
 
-        collected.push(rep); setReports([...collected]);
-      }
+        results[idx] = rep; commit();
+      }));
+
+      results.filter(Boolean).forEach((r) => collected.push(r));
 
       // Correlation is only meaningful across 2+ reports that actually have findings.
       const withFindings = collected.filter((r) => r.findings.length > 0).length;

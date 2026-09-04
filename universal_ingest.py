@@ -6,7 +6,8 @@
 # this handles everything else.)
 
 import json
-from llm import call_llm
+import cache
+from llm import call_llm, FAST_MODELS
 
 SCHEMA_HINT = (
     'Return ONLY a JSON array. Each item must be: '
@@ -51,13 +52,18 @@ def _normalize(item, source_name):
 
 def extract_findings(raw_report, source_name="unknown_tool"):
     """Use the LLM to turn ANY raw report into a normalized, validated findings list."""
+    ck = cache.key_for(source_name, raw_report)
+    cached = cache.get("extract", ck)
+    if cached is not None:
+        return cached
+
     system = (
         "You are a security report parser. Read the raw report below (it may come from any tool "
         "and be in any format) and extract every DISTINCT security finding into a normalized JSON "
         "array. Do NOT invent findings - extract only what is actually present. " + SCHEMA_HINT
     )
     user = f"SOURCE TOOL: {source_name}\n\nRAW REPORT:\n{raw_report}"
-    raw = call_llm(system, user)
+    raw = call_llm(system, user, models=FAST_MODELS)
 
     try:
         start, end = raw.find("["), raw.rfind("]")
@@ -68,6 +74,7 @@ def extract_findings(raw_report, source_name="unknown_tool"):
         items = []
 
     cleaned = [n for n in (_normalize(it, source_name) for it in items) if n]
+    cache.set("extract", ck, cleaned)
     return cleaned
 
 

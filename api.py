@@ -23,8 +23,9 @@ from pydantic import BaseModel
 
 from universal_ingest import extract_findings
 from correlate import correlate
+import cache
 from web_graph import build_web_graph, simulate_cut
-from llm import call_llm
+from llm import call_llm, FAST_MODELS
 
 app = FastAPI(title="Sentinel Digital Twin API")
 app.add_middleware(
@@ -83,6 +84,11 @@ class ReportBody(BaseModel):
 
 
 def _report_fixes(name: str, findings: list, focus: str) -> dict:
+    ck = cache.key_for(name, focus, json.dumps(findings, sort_keys=True))
+    cached = cache.get("fixes", ck)
+    if cached is not None:
+        return cached
+
     system = (
         "You are a security analyst. For THIS ONE report's findings, return ONLY JSON: "
         '{"fixes": ["short prioritized fix, most impactful first", ...], '
@@ -93,7 +99,7 @@ def _report_fixes(name: str, findings: list, focus: str) -> dict:
     if focus.strip():
         system += f" The analyst is specifically focused on: {focus.strip()!r} - prioritize that."
     user = f"REPORT: {name}\nFINDINGS:\n{json.dumps(findings, indent=2)}"
-    raw = call_llm(system, user)
+    raw = call_llm(system, user, models=FAST_MODELS)
     out = _json_obj(raw, {"fixes": [], "false_positives": []})
     # Validate/normalize so malformed model output can't break the UI.
     fixes = [str(f) for f in out.get("fixes", []) if isinstance(f, str) and f.strip()][:6]
@@ -101,7 +107,9 @@ def _report_fixes(name: str, findings: list, focus: str) -> dict:
         {"finding": str(fp.get("finding", "")), "why": str(fp.get("why", ""))}
         for fp in out.get("false_positives", []) if isinstance(fp, dict)
     ]
-    return {"fixes": fixes, "false_positives": fps}
+    result = {"fixes": fixes, "false_positives": fps}
+    cache.set("fixes", ck, result)
+    return result
 
 
 @app.post("/report-fixes")
