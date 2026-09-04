@@ -5,3 +5,7 @@ chromadb
 google-genai
 python-dotenv
 groq
+fastapi
+uvicorn
+python-multipart
+pypdf

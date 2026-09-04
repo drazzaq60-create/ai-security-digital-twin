@@ -38,15 +38,22 @@ def gather_all_findings():
 def correlate(findings):
     """Ask the LLM to correlate findings across tools into confirmed / false-positive / hidden."""
     system = (
-        "You are a senior security analyst correlating findings from MULTIPLE tools. "
-        "Analyze the combined findings and return ONLY a JSON object with exactly these three arrays:\n"
-        '  "confirmed": issues corroborated by 2+ tools (higher confidence),\n'
-        '  "false_positives": findings likely false or low-signal (say why),\n'
-        '  "hidden_risks": dangers that emerge ONLY by combining tools - for example, a web SQL-injection '
-        "finding on one host PLUS SIEM alerts of active SQL-injection attempts elsewhere can indicate an "
-        "active exploitation chain no single tool would flag.\n"
-        'Each array item must be: {"summary": "...", "hosts": [...], "tools": [...], "why": "..."}. '
-        "Base everything ONLY on the findings provided; do not invent anything."
+        "You are a senior security analyst correlating findings from MULTIPLE reports/tools.\n"
+        "STEP 1 - Decide relatedness: compare host/asset/domain/scope and decide whether the reports "
+        "concern the SAME target/environment or DIFFERENT, unrelated targets.\n"
+        "STRICT RULES (follow exactly):\n"
+        "- CONFIRMED: include an issue ONLY if two or more tools report the SAME issue on the SAME "
+        "asset/host. Never across different assets or unrelated reports.\n"
+        "- HIDDEN_RISKS: combine findings ONLY on the same or clearly connected assets in one "
+        "environment. Never invent a chain across unrelated targets.\n"
+        "- COMMON_FIXES: shared remediations addressing multiple correlated findings - ONLY when related.\n"
+        "- If the reports cover DIFFERENT, unrelated targets, set related=false and return EMPTY confirmed, "
+        "hidden_risks and common_fixes. Do NOT fabricate correlations. Empty is the correct answer.\n"
+        "- If unsure whether two findings relate, do NOT correlate them.\n"
+        'Return ONLY a JSON object: {"scope": "one sentence: same target or different/unrelated?", '
+        '"related": true or false, "confirmed": [], "hidden_risks": [], "common_fixes": []}. '
+        'confirmed/hidden_risks items: {"summary": "...", "hosts": [...], "tools": [...], "why": "..."}; '
+        "common_fixes is an array of short strings. Base everything ONLY on the findings provided."
     )
     user = "COMBINED FINDINGS (JSON):\n" + json.dumps(findings, indent=2)
     raw = call_llm(system, user)
@@ -61,8 +68,9 @@ if __name__ == "__main__":
     findings = gather_all_findings()
     print(f"Gathered {len(findings)} findings across all tools. Correlating...\n")
     result = correlate(findings)
+    print(f"scope: {result.get('scope', '')}")
+    print(f"related: {result.get('related')}\n")
     for section, label in [("confirmed", "CONFIRMED (multiple tools agree)"),
-                           ("false_positives", "LIKELY FALSE POSITIVES"),
                            ("hidden_risks", "HIDDEN / CHAINED RISKS")]:
         print(f"=== {label} ===")
         for item in result.get(section, []):
@@ -70,3 +78,6 @@ if __name__ == "__main__":
             print(f"     hosts: {item.get('hosts')}   tools: {item.get('tools')}")
             print(f"     why: {item.get('why', '')}\n")
         print()
+    print("=== COMMON FIXES ===")
+    for fix in result.get("common_fixes", []):
+        print(f" - {fix}")
