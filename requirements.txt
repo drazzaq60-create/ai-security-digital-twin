@@ -1,0 +1,7 @@
+networkx
+streamlit
+matplotlib
+chromadb
+google-genai
+python-dotenv
+groq
