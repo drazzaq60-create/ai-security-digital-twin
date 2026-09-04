@@ -14,9 +14,12 @@
 
 import io
 import json
-from typing import List
+import os
+import time
+import uuid
+from typing import List, Optional
 
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -26,7 +29,11 @@ from correlate import correlate
 import cache
 import guardrails
 from web_graph import build_web_graph, simulate_cut
+from report_export import build_pdf
 from llm import call_llm, FAST_MODELS
+
+RUNS_DIR = os.path.join(os.path.dirname(__file__), "runs")
+os.makedirs(RUNS_DIR, exist_ok=True)
 
 app = FastAPI(title="Sentinel Digital Twin API")
 app.add_middleware(
@@ -168,3 +175,61 @@ def simulate_endpoint(body: SimBody):
     if len(body.cut) != 2:
         return {"error": "cut must be [source, target]"}
     return simulate_cut(body.nodes, body.edges, body.cut)
+
+
+class RunBody(BaseModel):
+    reports: List[dict] = []
+    correlation: Optional[dict] = None
+    graph: Optional[dict] = None
+
+
+@app.post("/export-report")
+def export_report(body: RunBody):
+    """Render the full analysis to a downloadable PDF."""
+    pdf = build_pdf(body.model_dump())
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": 'attachment; filename="sentinel-report.pdf"'})
+
+
+@app.post("/runs")
+def save_run(body: RunBody):
+    """Persist one analysis so it can be reloaded later."""
+    rid = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    data = body.model_dump()
+    data["_id"], data["_created"] = rid, time.time()
+    with open(os.path.join(RUNS_DIR, rid + ".json"), "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    return {"id": rid}
+
+
+@app.get("/runs")
+def list_runs():
+    """List saved analyses (newest first) with a short summary each."""
+    out = []
+    for fn in sorted(os.listdir(RUNS_DIR), reverse=True):
+        if not fn.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(RUNS_DIR, fn), encoding="utf-8") as f:
+                d = json.load(f)
+        except Exception:
+            continue
+        reports = d.get("reports", []) or []
+        out.append({
+            "id": d.get("_id", fn[:-5]), "created": d.get("_created"),
+            "reports": len(reports),
+            "findings": sum(len(r.get("findings", []) or []) for r in reports),
+            "names": [r.get("name") for r in reports][:4],
+        })
+    return {"runs": out[:100]}
+
+
+@app.get("/runs/{run_id}")
+def get_run(run_id: str):
+    """Load one saved analysis by id."""
+    safe = os.path.basename(run_id)  # prevent path traversal
+    p = os.path.join(RUNS_DIR, safe + ".json")
+    if not os.path.exists(p):
+        return {"error": "not found"}
+    with open(p, encoding="utf-8") as f:
+        return json.load(f)

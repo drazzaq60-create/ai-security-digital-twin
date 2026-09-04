@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef, useMemo, useEffect } from "react";
 
 // Configurable so a deployed build can point at a real backend, not the visitor's own PC.
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -19,7 +19,16 @@ export default function Home() {
   const [simCut, setSimCut] = useState(null);
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
+  const [runs, setRuns] = useState([]);
   const inputRef = useRef(null);
+
+  async function loadRuns() {
+    try {
+      const r = await fetch(`${API_URL}/runs`);
+      if (r.ok) { const d = await r.json(); setRuns(d.runs || []); }
+    } catch { /* history is best-effort */ }
+  }
+  useEffect(() => { loadRuns(); }, []);
 
   function addFiles(list) {
     const incoming = Array.from(list);
@@ -114,6 +123,8 @@ export default function Home() {
 
       results.filter(Boolean).forEach((r) => collected.push(r));
 
+      let corrOut = null, graphOut = null;  // captured for auto-save
+
       // Correlation is only meaningful across 2+ reports that actually have findings.
       const withFindings = collected.filter((r) => r.findings.length > 0).length;
       if (withFindings >= 2) {
@@ -126,7 +137,8 @@ export default function Home() {
           });
           if (!cRes.ok) throw new Error(`correlate failed (${cRes.status})`);
           const cData = await cRes.json();
-          setCorrelation(cData.correlation || {});
+          corrOut = cData.correlation || {};
+          setCorrelation(corrOut);
           logLine(
             cData.correlation?.related
               ? "✓ Reports are related — correlation complete"
@@ -153,6 +165,7 @@ export default function Home() {
           });
           if (!gRes.ok) throw new Error(`graph failed (${gRes.status})`);
           const gData = await gRes.json();
+          graphOut = gData;
           setGraph(gData);
           logLine(
             `✓ Attack surface: ${Math.max((gData.nodes?.length || 1) - 1, 0)} host(s), ` +
@@ -170,6 +183,16 @@ export default function Home() {
         failed > 0 ? `Analysis finished with ${failed} failed report(s)` : "Analysis finished",
         failed > 0 ? "err" : "done"
       );
+
+      // Auto-save this analysis so it can be reloaded from History later.
+      try {
+        await fetch(`${API_URL}/runs`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reports: collected, correlation: corrOut, graph: graphOut }),
+        });
+        loadRuns();
+      } catch { /* best-effort */ }
     } catch (e) {
       const m = (e && e.message) || "error";
       setError(`${m} — is the backend running on :8000?`);
@@ -195,6 +218,40 @@ export default function Home() {
     }
   }
   function clearSim() { setSim(null); setSimCut(null); }
+
+  async function exportPdf() {
+    try {
+      const res = await fetch(`${API_URL}/export-report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reports, correlation, graph }),
+      });
+      if (!res.ok) throw new Error(`export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = "sentinel-report.pdf";
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(`Export failed: ${(e && e.message) || "error"}`);
+    }
+  }
+
+  async function loadRun(id) {
+    try {
+      const r = await fetch(`${API_URL}/runs/${id}`);
+      if (!r.ok) return;
+      const d = await r.json();
+      if (d.error) return;
+      setReports(d.reports || []);
+      setCorrelation(d.correlation || null);
+      setCorrelationError("");
+      setGraph(d.graph || null);
+      setGraphError(""); setSim(null); setSimCut(null); setError("");
+      setLog([{ text: `Loaded saved analysis ${id}`, kind: "done", t: new Date().toLocaleTimeString() }]);
+    } catch { /* ignore */ }
+  }
 
   const okReports = reports.filter((r) => r.status !== "failed");
   const totalFindings = reports.reduce((n, r) => n + (r.findings?.length || 0), 0);
@@ -251,11 +308,30 @@ export default function Home() {
           {running ? "Analyzing…" : "▶ Run Analysis"}
         </button>
         {error && <div className="err-box">{error}</div>}
+
+        {runs.length > 0 && (
+          <>
+            <div className="side-label">History</div>
+            <div className="run-list">
+              {runs.slice(0, 8).map((r) => (
+                <button key={r.id} className="run-item" onClick={() => loadRun(r.id)} title={r.id}>
+                  <span className="run-names">{(r.names || []).join(", ") || "—"}</span>
+                  <span className="run-meta">{r.reports} report(s) · {r.findings} findings</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </aside>
 
       <main className="main">
         <div className="topbar">
-          <h1>Analysis Console</h1>
+          <div className="topbar-left">
+            <h1>Analysis Console</h1>
+            {reports.length > 0 && !running && (
+              <button className="export-btn" onClick={exportPdf}>⬇ Export PDF</button>
+            )}
+          </div>
           <div className="stat-row">
             <Stat n={reports.length} label="Reports" />
             <Stat n={totalFindings} label="Findings" />

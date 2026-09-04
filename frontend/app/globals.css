@@ -52,6 +52,18 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
 .main { padding: 26px 30px 60px; overflow-x: hidden; }
 .topbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 22px; }
 .topbar h1 { font-size: 22px; margin: 0; }
+.topbar-left { display: flex; align-items: center; gap: 14px; }
+.export-btn { background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 9px; padding: 8px 14px; font-size: 13px; font-weight: 700; cursor: pointer; }
+.export-btn:hover { border-color: var(--mint); color: var(--mint-2); }
+
+/* Saved-runs history */
+.run-list { display: flex; flex-direction: column; gap: 6px; }
+.run-item { text-align: left; background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 9px; padding: 8px 11px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.run-item:hover { border-color: var(--mint); }
+.run-names { font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-meta { font-size: 11px; color: var(--muted); }
 .stat-row { display: flex; gap: 12px; }
 .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px; text-align: center; min-width: 78px; }
 .stat-n { font-size: 22px; font-weight: 800; font-family: ui-monospace, monospace; }
