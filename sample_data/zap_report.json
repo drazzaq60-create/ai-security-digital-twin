@@ -1,0 +1,9 @@
+{
+  "site": "http://10.0.0.5",
+  "host": "web01",
+  "alerts": [
+    {"name": "SQL Injection", "risk": "High", "cweid": 89},
+    {"name": "Cross Site Scripting (Reflected)", "risk": "Medium", "cweid": 79},
+    {"name": "Missing Anti-CSRF Tokens", "risk": "Low", "cweid": 352}
+  ]
+}

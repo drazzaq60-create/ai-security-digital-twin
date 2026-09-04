@@ -1,0 +1,12 @@
+{
+  "web01": [
+    {"cve": "CVE-2021-41773", "name": "Apache Path Traversal / RCE", "severity": 9.8},
+    {"cve": "CVE-2018-15473", "name": "OpenSSH username enumeration", "severity": 5.3}
+  ],
+  "app01": [
+    {"cve": "CVE-2020-1938", "name": "Apache Tomcat AJP 'Ghostcat'", "severity": 9.8}
+  ],
+  "db01": [
+    {"cve": "CVE-2016-6662", "name": "MySQL remote privilege escalation", "severity": 8.1}
+  ]
+}
