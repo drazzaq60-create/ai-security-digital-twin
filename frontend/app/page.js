@@ -52,7 +52,7 @@ export default function Home() {
       await Promise.all(files.map(async (f, idx) => {
         const rep = {
           name: f.name, findings: [], fixes: [], false_positives: [],
-          status: "ok", error: "", fixesFailed: false,
+          status: "ok", error: "", fixesFailed: false, security: null,
         };
 
         logLine(`Extracting findings from ${f.name}…`);
@@ -63,6 +63,10 @@ export default function Home() {
           if (!eRes.ok) throw new Error(`extract failed (${eRes.status})`);
           const eData = await eRes.json();
           rep.name = eData.name || f.name;
+          rep.security = eData.security || null;
+          if (rep.security?.injection_detected) {
+            logLine(`🛡️ ${rep.name}: prompt-injection detected — ${rep.security.count} attempt(s), ${rep.security.max_severity} severity (blocked, findings still extracted)`, "err");
+          }
 
           if (eData.error) {
             rep.status = "failed"; rep.error = eData.error;
@@ -81,6 +85,9 @@ export default function Home() {
           logLine(`✗ ${rep.name}: ${rep.error}`, "err");
           results[idx] = rep; commit(); return;
         }
+
+        // Show findings + security scan result immediately; fixes fill in when ready.
+        results[idx] = rep; commit();
 
         // Per-report fixes — only if this report actually produced findings.
         if (rep.findings.length > 0) {
@@ -192,6 +199,7 @@ export default function Home() {
   const okReports = reports.filter((r) => r.status !== "failed");
   const totalFindings = reports.reduce((n, r) => n + (r.findings?.length || 0), 0);
   const failedCount = reports.filter((r) => r.status === "failed").length;
+  const injectionReports = reports.filter((r) => r.security?.injection_detected);
   const related = !!correlation?.related && !correlationError;
   const commonFixes = related ? (correlation?.common_fixes || []) : [];
   const nConfirmed = related ? (correlation?.confirmed?.length || 0) : 0;
@@ -250,6 +258,7 @@ export default function Home() {
             <Stat n={totalFindings} label="Findings" />
             <Stat n={nConfirmed} label="Confirmed" tone="ok" />
             <Stat n={nHidden} label="Hidden" tone="danger" />
+            {injectionReports.length > 0 && <Stat n={injectionReports.length} label="Injection" tone="danger" />}
             {failedCount > 0 && <Stat n={failedCount} label="Failed" tone="danger" />}
           </div>
         </div>
@@ -263,6 +272,34 @@ export default function Home() {
             ))}
           </div>
         </div>
+
+        {/* Guardrails — LLM security. Shows prompt-injection scan results per report. */}
+        {reports.length > 0 && (
+          <div className="panel">
+            <div className="panel-head">🛡️ Guardrails — LLM Security</div>
+            {injectionReports.length === 0 ? (
+              <div className="gr-clean">✓ No prompt-injection detected. Every report is scanned before the AI reads it, and report text is fed to the model as data, never as instructions.</div>
+            ) : (
+              <div className="gr-body">
+                <div className="gr-warn">
+                  ⚠️ Prompt-injection detected &amp; blocked in {injectionReports.length} report(s).
+                  The attack was flagged and the model was hardened against it — real findings were still extracted.
+                </div>
+                {injectionReports.map((r, i) => (
+                  <div key={i} className="gr-report">
+                    <div className="gr-name">📄 {r.name} <span className="gr-sev">{r.security.count} attempt(s) · {r.security.max_severity}</span></div>
+                    {r.security.detections.map((d, j) => (
+                      <div key={j} className="gr-det">
+                        <span className={`gr-tech t-${(d.severity || "").toLowerCase()}`}>{d.technique}</span>
+                        <code className="gr-snip">{d.snippet}</code>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Prioritized fixes, grouped by report name; correlated fixes last */}
         {okReports.length > 0 && (
@@ -344,6 +381,7 @@ export default function Home() {
               <details key={i} className="report" open={i === reports.length - 1}>
                 <summary>
                   {r.name}
+                  {r.security?.injection_detected && <span className="count inj">🛡️ injection</span>}
                   {r.status === "failed" && <span className="count fail">failed</span>}
                   {r.status === "empty" && <span className="count empty">no findings</span>}
                   {r.status === "ok" && <span className="count">{r.findings?.length || 0}</span>}
