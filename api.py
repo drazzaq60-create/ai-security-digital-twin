@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from universal_ingest import extract_findings
 from correlate import correlate
 import cache
+import guardrails
 from web_graph import build_web_graph, simulate_cut
 from llm import call_llm, FAST_MODELS
 
@@ -72,9 +73,13 @@ async def extract(file: UploadFile = File(...)):
             "error": "Could not extract readable text (possibly a scanned / image-only PDF, "
                      "an empty file, or an unsupported binary format).",
         }
+    # Layer 1 (detect): scan the untrusted report for prompt-injection BEFORE the LLM reads it.
+    security = guardrails.summarize(guardrails.scan_injection(text))
+
     # Blocking LLM work runs in a worker thread so the event loop stays responsive.
+    # (The extraction itself is hardened - Layer 2 - inside extract_findings.)
     findings = await run_in_threadpool(extract_findings, text, file.filename)
-    return {"name": file.filename, "findings": findings, "error": None}
+    return {"name": file.filename, "findings": findings, "error": None, "security": security}
 
 
 class ReportBody(BaseModel):

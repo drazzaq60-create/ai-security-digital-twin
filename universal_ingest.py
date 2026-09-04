@@ -7,6 +7,7 @@
 
 import json
 import cache
+import guardrails
 from llm import call_llm, FAST_MODELS
 
 SCHEMA_HINT = (
@@ -57,12 +58,14 @@ def extract_findings(raw_report, source_name="unknown_tool"):
     if cached is not None:
         return cached
 
-    system = (
+    # Layer 2 (harden): warn the model that the report is untrusted, and wrap the report
+    # text in delimiters so the model treats it as DATA, never as instructions to obey.
+    system = guardrails.INJECTION_DEFENSE + (
         "You are a security report parser. Read the raw report below (it may come from any tool "
         "and be in any format) and extract every DISTINCT security finding into a normalized JSON "
         "array. Do NOT invent findings - extract only what is actually present. " + SCHEMA_HINT
     )
-    user = f"SOURCE TOOL: {source_name}\n\nRAW REPORT:\n{raw_report}"
+    user = f"SOURCE TOOL: {source_name}\n\n" + guardrails.harden_prompt(raw_report)
     raw = call_llm(system, user, models=FAST_MODELS)
 
     try:
