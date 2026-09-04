@@ -51,12 +51,15 @@ def _normalize(item, source_name):
     }
 
 
-def extract_findings(raw_report, source_name="unknown_tool"):
-    """Use the LLM to turn ANY raw report into a normalized, validated findings list."""
+def extract_findings(raw_report, source_name="unknown_tool", return_meta=False):
+    """Use the LLM to turn ANY raw report into a normalized, validated findings list.
+
+    With return_meta=True, also return a Layer-3 output check {ok, reason} that flags
+    signs the model was hijacked or leaked its prompt (a successful injection)."""
     ck = cache.key_for(source_name, raw_report)
     cached = cache.get("extract", ck)
     if cached is not None:
-        return cached
+        return (cached, {"ok": True, "reason": "cached"}) if return_meta else cached
 
     # Layer 2 (harden): warn the model that the report is untrusted, and wrap the report
     # text in delimiters so the model treats it as DATA, never as instructions to obey.
@@ -68,6 +71,9 @@ def extract_findings(raw_report, source_name="unknown_tool"):
     user = f"SOURCE TOOL: {source_name}\n\n" + guardrails.harden_prompt(raw_report)
     raw = call_llm(system, user, models=FAST_MODELS)
 
+    # Layer 3 (check output): did the model get hijacked or leak its prompt?
+    out_check = guardrails.check_output(raw)
+
     try:
         start, end = raw.find("["), raw.rfind("]")
         items = json.loads(raw[start:end + 1]) if start != -1 and end != -1 else []
@@ -78,7 +84,7 @@ def extract_findings(raw_report, source_name="unknown_tool"):
 
     cleaned = [n for n in (_normalize(it, source_name) for it in items) if n]
     cache.set("extract", ck, cleaned)
-    return cleaned
+    return (cleaned, out_check) if return_meta else cleaned
 
 
 if __name__ == "__main__":

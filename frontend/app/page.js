@@ -200,6 +200,9 @@ export default function Home() {
   const totalFindings = reports.reduce((n, r) => n + (r.findings?.length || 0), 0);
   const failedCount = reports.filter((r) => r.status === "failed").length;
   const injectionReports = reports.filter((r) => r.security?.injection_detected);
+  const flaggedReports = reports.filter(
+    (r) => r.security && (r.security.injection_detected || r.security.output_ok === false)
+  );
   const related = !!correlation?.related && !correlationError;
   const commonFixes = related ? (correlation?.common_fixes || []) : [];
   const nConfirmed = related ? (correlation?.confirmed?.length || 0) : 0;
@@ -277,23 +280,31 @@ export default function Home() {
         {reports.length > 0 && (
           <div className="panel">
             <div className="panel-head">🛡️ Guardrails — LLM Security</div>
-            {injectionReports.length === 0 ? (
-              <div className="gr-clean">✓ No prompt-injection detected. Every report is scanned before the AI reads it, and report text is fed to the model as data, never as instructions.</div>
+            {flaggedReports.length === 0 ? (
+              <div className="gr-clean">✓ No prompt-injection detected, and every AI response passed the output check. Reports are scanned before the model reads them (L1), fed in as data not instructions (L2), and each response is checked for hijack/leak (L3).</div>
             ) : (
               <div className="gr-body">
                 <div className="gr-warn">
-                  ⚠️ Prompt-injection detected &amp; blocked in {injectionReports.length} report(s).
-                  The attack was flagged and the model was hardened against it — real findings were still extracted.
+                  ⚠️ Security events in {flaggedReports.length} report(s).
+                  Attacks were detected and the model was hardened against them — real findings were still extracted.
                 </div>
-                {injectionReports.map((r, i) => (
+                {flaggedReports.map((r, i) => (
                   <div key={i} className="gr-report">
-                    <div className="gr-name">📄 {r.name} <span className="gr-sev">{r.security.count} attempt(s) · {r.security.max_severity}</span></div>
-                    {r.security.detections.map((d, j) => (
+                    <div className="gr-name">
+                      📄 {r.name}
+                      {r.security.injection_detected && <span className="gr-sev">{r.security.count} injection attempt(s) · {r.security.max_severity}</span>}
+                    </div>
+                    {(r.security.detections || []).map((d, j) => (
                       <div key={j} className="gr-det">
                         <span className={`gr-tech t-${(d.severity || "").toLowerCase()}`}>{d.technique}</span>
                         <code className="gr-snip">{d.snippet}</code>
                       </div>
                     ))}
+                    {r.security.output_ok === false ? (
+                      <div className="gr-out fail">⚠ Output check FAILED — {r.security.output_reason}. The model's reply looked suspicious; review this report (possible successful injection).</div>
+                    ) : (
+                      <div className="gr-out ok">✓ Output check passed — no sign of hijack or prompt leak in the model's reply.</div>
+                    )}
                   </div>
                 ))}
               </div>

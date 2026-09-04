@@ -77,8 +77,10 @@ async def extract(file: UploadFile = File(...)):
     security = guardrails.summarize(guardrails.scan_injection(text))
 
     # Blocking LLM work runs in a worker thread so the event loop stays responsive.
-    # (The extraction itself is hardened - Layer 2 - inside extract_findings.)
-    findings = await run_in_threadpool(extract_findings, text, file.filename)
+    # (Extraction is hardened - Layer 2 - and returns a Layer-3 output check.)
+    findings, out_check = await run_in_threadpool(extract_findings, text, file.filename, True)
+    security["output_ok"] = out_check.get("ok", True)
+    security["output_reason"] = out_check.get("reason", "")
     return {"name": file.filename, "findings": findings, "error": None, "security": security}
 
 
