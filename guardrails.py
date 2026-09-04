@@ -38,6 +38,7 @@ _PATTERNS = [
      r"(?:any\s+)?(?:findings?|vulnerabilit|issues?|problems?)"),
     ("force_false_positive", "High",
      r"(?:mark|report|classify|treat)\s+(?:all|everything|every\s+finding|them)\s+as\s+"
+     r"(?:a\s+|an\s+|the\s+)?"  # allow an article: "as a false positive"
      r"(?:safe|clean|secure|false\s+positives?|not\s+(?:a\s+)?(?:vuln|issue|problem))"),
     ("system_prompt_probe", "High",
      r"(?:reveal|show|print|repeat|output|display|tell\s+me)\s+(?:your\s+|the\s+)?"
