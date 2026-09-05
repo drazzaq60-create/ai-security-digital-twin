@@ -68,6 +68,43 @@ def _worst(fs):
     return ("Unknown", "exposure") if best is None else (best[1], best[2])
 
 
+EXPLOIT_TYPES = {"vulnerability", "web", "alert"}
+
+
+def _edge_basis(fs):
+    """What KIND of transition does the evidence support on the destination host?
+
+    Returns (basis, severity, via):
+      - "exploit"  : a real vulnerability (Medium+ vuln/web/alert finding, or a CVE) that
+                     could actually enable moving onto the host -> a genuine attack step.
+      - "exposure" : only an open/observed service (Info/Low, or type=service) -> reachable
+                     and exposed, but NOT a confirmed exploitable transition.
+    This is the core of not calling an open port an 'attack step'."""
+    best = None
+    for f in fs:
+        sev = (f.get("severity") or "unknown").lower()
+        typ = (f.get("type") or "other").lower()
+        text = ((f.get("name") or "") + " " + (f.get("evidence") or "")).lower()
+        is_exploit = ("cve-" in text) or (typ in EXPLOIT_TYPES and SEV_RANK.get(sev, 1) >= 3)
+        if is_exploit:
+            r = SEV_RANK.get(sev, 1)
+            if best is None or r > best[0]:
+                best = (r, f.get("severity") or "Unknown", f.get("name") or "finding")
+    if best:
+        return ("exploit", best[1], best[2])
+    sev, via = _worst(fs)
+    return ("exposure", sev, via)
+
+
+def _action(basis, dst, via, internet):
+    """Honest remediation verb for an edge, based on what it actually represents."""
+    if basis == "exploit":
+        return f"Remediate: {via} on {dst}"
+    if internet:
+        return f"Restrict Internet exposure of {dst}"
+    return f"Restrict / segment network access to {dst}"
+
+
 def _criticality(fs):
     t = _text(fs)
     if any(k in t for k in DB_HINTS):
@@ -99,10 +136,14 @@ def build_web_graph(findings):
 
     edges = []
 
-    def add_edge(u, v):
-        sev, via = _worst(hf[v])
-        edges.append({"source": u, "target": v, "severity": sev,
-                      "exploit": SEV_EXPLOIT.get(sev.lower(), 0.1), "via": via, "assumed": True})
+    def add_edge(u, v, internet=False):
+        basis, sev, via = _edge_basis(hf[v])
+        # exposure-only steps get a low, fixed likelihood (reachable, not proven exploitable);
+        # exploit steps scale with the vuln severity.
+        like = SEV_EXPLOIT.get(sev.lower(), 0.1) if basis == "exploit" else 0.15
+        edges.append({"source": u, "target": v, "basis": basis, "topology": "inferred",
+                      "severity": sev, "exploit": like, "via": via, "assumed": True,
+                      "action": _action(basis, v, via, internet)})
 
     if not facing:
         facing = list(hf.keys())
@@ -113,7 +154,7 @@ def build_web_graph(findings):
                            "such findings are treated as internal-only.")
 
     for h in facing:
-        add_edge("Internet", h)
+        add_edge("Internet", h, internet=True)
 
     hosts = list(hf.keys())
     lateral = False
@@ -130,6 +171,9 @@ def build_web_graph(findings):
                            "reports do not prove these paths exist.")
     assumptions.append("Asset criticality is a heuristic (datastore = high, web/app = medium, other "
                        "= low), not confirmed business value.")
+    assumptions.append("All paths are HYPOTHETICAL: topology is inferred, so no path is a confirmed "
+                       "attack path. 'Vuln-backed' paths have an exploitable finding at every hop; "
+                       "'exposure-only' paths include steps that are merely open services.")
 
     result = compute_paths(nodes, edges)
     result.update({"nodes": nodes, "edges": edges, "assumptions": assumptions,
@@ -145,7 +189,8 @@ def _graph_from(nodes, edges, skip=None):
         if skip and e["source"] == skip[0] and e["target"] == skip[1]:
             continue
         G.add_edge(e["source"], e["target"], exploit=e.get("exploit", 0.1),
-                   severity=e.get("severity", "Unknown"), via=e.get("via", ""))
+                   severity=e.get("severity", "Unknown"), via=e.get("via", ""),
+                   basis=e.get("basis", "exposure"), action=e.get("action", ""))
     return G
 
 
@@ -167,11 +212,16 @@ def compute_paths(nodes, edges, skip=None):
                 for i in range(len(p) - 1):
                     ed = G[p[i]][p[i + 1]]
                     like *= ed["exploit"]
-                    steps.append({"from": p[i], "to": p[i + 1],
-                                  "severity": ed["severity"], "via": ed["via"]})
+                    steps.append({"from": p[i], "to": p[i + 1], "severity": ed["severity"],
+                                  "via": ed["via"], "basis": ed.get("basis", "exposure"),
+                                  "action": ed.get("action", "")})
                 crit = crit_map.get(t, 1)
+                # Every path here is HYPOTHETICAL (topology is inferred, never supplied).
+                # vuln-backed = an exploitable vuln at every hop; exposure = >=1 open-service hop.
+                path_class = "vuln" if steps and all(s["basis"] == "exploit" for s in steps) else "exposure"
                 paths.append({"path": p, "steps": steps, "target": t, "criticality": crit,
-                              "likelihood": round(like * 100), "priority": round(crit * like * 100)})
+                              "likelihood": round(like * 100), "priority": round(crit * like * 100),
+                              "path_class": path_class, "confirmed": False})
                 reachable.add(t)
 
     paths.sort(key=lambda x: x["priority"], reverse=True)

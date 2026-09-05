@@ -640,6 +640,7 @@ function AttackSurface({ graph, sim, simCut, onSimulate, onClear }) {
   const { pos, width, height, NW, NH } = useMemo(() => computeLayout(graph), [graph]);
   const reachable = new Set(graph.reachable_critical || []);
   const cutKey = simCut ? `${simCut[0]}->${simCut[1]}` : null;
+  const cutEdge = simCut ? (graph.edges || []).find((e) => e.source === simCut[0] && e.target === simCut[1]) : null;
 
   let verdict = null;
   if (sim && !sim.error) {
@@ -671,16 +672,17 @@ function AttackSurface({ graph, sim, simCut, onSimulate, onClear }) {
             const a = pos[e.source], b = pos[e.target];
             if (!a || !b) return null;
             const isCut = cutKey === `${e.source}->${e.target}`;
+            const exposure = e.basis === "exposure";
             const x1 = a.x + NW / 2, y1 = a.y, x2 = b.x - NW / 2, y2 = b.y;
             return (
               <g key={i} className="edge" style={{ cursor: "pointer" }} onClick={() => onSimulate([e.source, e.target])}>
                 <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="transparent" strokeWidth="16" />
                 <line x1={x1} y1={y1} x2={x2} y2={y2}
-                  stroke={isCut ? "#475569" : sevColor(e.severity)}
+                  stroke={isCut ? "#475569" : (exposure ? "#64748b" : sevColor(e.severity))}
                   strokeWidth={isCut ? 1.5 : 2.5}
-                  strokeDasharray={isCut ? "5 5" : "0"}
+                  strokeDasharray={(isCut || exposure) ? "5 5" : "0"}
                   markerEnd="url(#arrow)" />
-                <title>{e.source} → {e.target} · {e.severity} · via {e.via}{e.assumed ? " · assumed" : ""}{isCut ? " · CUT" : ""} — click to simulate patching this</title>
+                <title>{e.source} → {e.target} · {exposure ? "exposure-only (open service)" : "vuln-backed"} · {e.severity} · via {e.via} · topology {e.topology || "inferred"}{isCut ? " · CUT" : ""} — click to simulate: {e.action}</title>
               </g>
             );
           })}
@@ -701,18 +703,29 @@ function AttackSurface({ graph, sim, simCut, onSimulate, onClear }) {
           })}
         </svg>
       </div>
+      <div className="graph-legend">
+        <span><svg width="26" height="8"><line x1="1" y1="4" x2="25" y2="4" stroke="#ef4444" strokeWidth="2.5" /></svg> vuln-backed step (exploitable finding)</span>
+        <span><svg width="26" height="8"><line x1="1" y1="4" x2="25" y2="4" stroke="#64748b" strokeWidth="2" strokeDasharray="4 3" /></svg> exposure-only step (open service, no confirmed vuln)</span>
+      </div>
 
       <div className="paths">
         <div className="paths-head">
-          Attack paths to critical assets <span className="badge">{graph.paths.length}</span>
+          Potential paths to critical assets <span className="badge">{graph.paths.length}</span>
+          <div className="paths-sub">
+            All paths are <b>hypothetical</b> — topology is inferred, not supplied. <b>Vuln-backed</b> =
+            an exploitable finding at every hop; <b>exposure-only</b> = includes steps that are just open services.
+          </div>
         </div>
         {graph.paths.length === 0 && (
           <p className="muted">No path from the Internet to a critical asset under the current
-            (assumed) topology. Either nothing high-value is exposed, or the reports don't describe
+            (inferred) topology. Either nothing high-value is exposed, or the reports don't describe
             a reachable chain.</p>
         )}
         {graph.paths.map((pth, i) => (
           <div key={i} className="path-row">
+            <span className={`pclass ${pth.path_class === "vuln" ? "vuln" : "exposure"}`}>
+              {pth.path_class === "vuln" ? "HYPOTHETICAL · vuln-backed" : "HYPOTHETICAL · exposure-only"}
+            </span>
             <div className="path-line">
               {pth.path.map((h, j) => (
                 <span key={j} className="hop">
@@ -728,8 +741,9 @@ function AttackSurface({ graph, sim, simCut, onSimulate, onClear }) {
             </div>
             <div className="path-cuts">
               {pth.steps.map((s, j) => (
-                <button key={j} className="cutbtn" onClick={() => onSimulate([s.from, s.to])}>
-                  ✂ patch {s.from === "Internet" ? "🌐" : s.from} → {s.to}
+                <button key={j} className={`cutbtn ${s.basis === "exploit" ? "b-exploit" : "b-exposure"}`}
+                  onClick={() => onSimulate([s.from, s.to])} title={`Simulate: ${s.action}`}>
+                  ✂ {s.action || `${s.from} → ${s.to}`}
                 </button>
               ))}
             </div>
@@ -744,7 +758,7 @@ function AttackSurface({ graph, sim, simCut, onSimulate, onClear }) {
           ) : (
             <>
               <div className="sim-head">
-                🧪 What-if: patch <b>{simCut[0] === "Internet" ? "🌐 Internet" : simCut[0]} → {simCut[1]}</b>
+                🧪 What-if: <b>{cutEdge?.action || `${simCut[0]} → ${simCut[1]}`}</b>
                 <button className="linkbtn" onClick={onClear}>clear</button>
               </div>
               <div className="sim-cols">
