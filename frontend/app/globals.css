@@ -121,6 +121,8 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
 .report .count.fail { background: rgba(239,68,68,.15); color: #fca5a5; }
 .report .count.empty { background: rgba(148,163,184,.15); color: var(--muted); }
 .report .count.inj { background: rgba(239,68,68,.18); color: #fca5a5; }
+.report .count.parser.det { background: rgba(16,185,129,.12); color: var(--mint-2); }
+.report .count.parser.llm { background: rgba(59,130,246,.14); color: #93c5fd; }
 
 /* Guardrails / LLM-security panel */
 .gr-clean { margin: 14px 16px; padding: 12px 16px; border-radius: 10px; font-size: 13px;

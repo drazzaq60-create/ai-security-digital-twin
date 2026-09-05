@@ -62,7 +62,7 @@ export default function Home() {
       await Promise.all(files.map(async (f, idx) => {
         const rep = {
           name: f.name, findings: [], fixes: [], false_positives: [],
-          status: "ok", error: "", fixesFailed: false, security: null,
+          status: "ok", error: "", fixesFailed: false, security: null, parser: null,
         };
 
         logLine(`Extracting findings from ${f.name}…`);
@@ -74,7 +74,11 @@ export default function Home() {
           const eData = await eRes.json();
           rep.name = eData.name || f.name;
           rep.sha256 = eData.sha256 || null;
+          rep.parser = eData.parser || null;
           rep.security = eData.security || null;
+          if (rep.parser && rep.parser.startsWith("deterministic:")) {
+            logLine(`⚡ ${rep.name}: parsed by ${rep.parser.split(":")[1]} parser (deterministic, no LLM)`, "ok");
+          }
           if (rep.security?.injection_detected) {
             logLine(`🛡️ ${rep.name}: prompt-injection detected — ${rep.security.count} attempt(s), ${rep.security.max_severity} severity (blocked, findings still extracted)`, "err");
           }
@@ -382,6 +386,7 @@ export default function Home() {
                       <tr key={i}>
                         <td>{f.name}</td>
                         <td className="mono">{f.sha256 ? f.sha256.slice(0, 12) + "…" : "—"}</td>
+                        <td>{f.parser ? (f.parser.startsWith("deterministic") ? f.parser.split(":")[1] + " (deterministic)" : "LLM") : "—"}</td>
                         <td>{f.findings} findings</td>
                         <td className={f.security_evaluated ? "prov-ok" : "prov-na"}>
                           {f.security_evaluated ? "✓ security checked" : "• not checked"}
@@ -530,6 +535,11 @@ export default function Home() {
                   {r.status === "failed" && <span className="count fail">failed</span>}
                   {r.status === "empty" && <span className="count empty">no findings</span>}
                   {r.status === "ok" && <span className="count">{r.findings?.length || 0}</span>}
+                  {r.parser && (
+                    <span className={`count parser ${r.parser.startsWith("deterministic") ? "det" : "llm"}`}>
+                      {r.parser.startsWith("deterministic") ? "⚡ " + r.parser.split(":")[1] : "LLM"}
+                    </span>
+                  )}
                 </summary>
                 {r.status === "failed" && <div className="fail-box">⚠ {r.error}</div>}
                 {r.findings?.length > 0 && (

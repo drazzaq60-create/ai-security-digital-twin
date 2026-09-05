@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from universal_ingest import extract_findings
+from deterministic_ingest import parse_deterministic
 from correlate import correlate
 import cache
 import guardrails
@@ -79,20 +80,30 @@ async def extract(file: UploadFile = File(...)):
     text = read_report(raw, file.filename)
     if len(text.strip()) < 30:
         return {
-            "name": file.filename, "findings": [], "sha256": sha256,
+            "name": file.filename, "findings": [], "sha256": sha256, "parser": None,
             "error": "Could not extract readable text (possibly a scanned / image-only PDF, "
                      "an empty file, or an unsupported binary format).",
         }
-    # Layer 1 (detect): scan the untrusted report for prompt-injection BEFORE the LLM reads it.
+    # Layer 1 (detect): scan the untrusted report for prompt-injection (runs regardless).
     security = guardrails.summarize(guardrails.scan_injection(text))
 
-    # Blocking LLM work runs in a worker thread so the event loop stays responsive.
-    # (Extraction is hardened - Layer 2 - and returns a Layer-3 output check.)
-    findings, out_check = await run_in_threadpool(extract_findings, text, file.filename, True)
-    security["output_ok"] = out_check.get("ok", True)
-    security["output_reason"] = out_check.get("reason", "")
+    # Deterministic first: for KNOWN formats we parse structured fields - instant, ground-truth,
+    # and immune to injection (no LLM prompt is built from the report). Fall back to the LLM parser.
+    det_findings, fmt = parse_deterministic(text, file.filename)
+    if det_findings is not None:
+        findings = det_findings
+        parser = f"deterministic:{fmt}"
+        security["output_ok"] = True
+        security["output_reason"] = "no LLM used for extraction (deterministic parser)"
+    else:
+        # Blocking LLM work runs in a worker thread; extraction is hardened (L2) + output-checked (L3).
+        findings, out_check = await run_in_threadpool(extract_findings, text, file.filename, True)
+        parser = "llm"
+        security["output_ok"] = out_check.get("ok", True)
+        security["output_reason"] = out_check.get("reason", "")
+
     return {"name": file.filename, "findings": findings, "sha256": sha256,
-            "error": None, "security": security}
+            "error": None, "security": security, "parser": parser}
 
 
 class ReportBody(BaseModel):
@@ -211,6 +222,7 @@ def _build_meta(data):
             {
                 "name": r.get("name"),
                 "sha256": r.get("sha256"),
+                "parser": r.get("parser"),
                 "findings": len(r.get("findings", []) or []),
                 # did the guardrails actually run on this report?
                 "security_evaluated": isinstance((r.get("security") or {}).get("injection_detected"), bool),
