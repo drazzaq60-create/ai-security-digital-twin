@@ -1,0 +1,14 @@
+{
+  "_comment": "Optional topology for the web01/app01/db01 sample environment. Upload this in the Topology (optional) slot so the graph can build real (confirmed) paths between hostname-based assets, which cannot be inferred from findings alone. control = firewall | network | service | port | trust | identity | permission.",
+  "assets": {
+    "web01": {"criticality": 3},
+    "app01": {"criticality": 3},
+    "db01":  {"criticality": 5}
+  },
+  "edges": [
+    {"from": "internet", "to": "web01", "control": "firewall"},
+    {"from": "web01",    "to": "app01", "control": "service"},
+    {"from": "app01",    "to": "db01",  "control": "service"},
+    {"from": "web01",    "to": "db01",  "control": "service"}
+  ]
+}

@@ -151,6 +151,7 @@ async def report_fixes(body: ReportBody):
 
 class Findings(BaseModel):
     findings: List[dict] = []
+    topology: Optional[dict] = None  # optional user-supplied connections (used by /graph)
 
 
 @app.post("/correlate")
@@ -173,11 +174,12 @@ async def correlate_endpoint(body: Findings):
 
 @app.post("/graph")
 def graph_endpoint(body: Findings):
-    """Attack-surface graph built FROM the uploaded findings (deterministic, no LLM)."""
+    """Attack-surface graph built FROM the uploaded findings, optionally using a user-supplied
+    topology (deterministic, no LLM)."""
     if not body.findings:
         return {"nodes": [], "edges": [], "paths": [], "assumptions": [],
-                "reachable_critical": [], "critical_assets": []}
-    return build_web_graph(body.findings)
+                "reachable_critical": [], "critical_assets": [], "topology_supplied": False}
+    return build_web_graph(body.findings, body.topology)
 
 
 class SimBody(BaseModel):

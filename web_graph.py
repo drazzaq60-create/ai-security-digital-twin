@@ -96,13 +96,26 @@ def _edge_basis(fs):
     return ("exposure", sev, via)
 
 
-def _action(basis, dst, via, internet):
-    """Honest remediation verb for an edge, based on what it actually represents."""
+# Control-specific remediation verbs (feature #3): the action fits what the edge represents.
+CONTROL_ACTION = {
+    "internet": "Restrict Internet exposure of {v}",
+    "lateral": "Restrict / segment network access to {v}",
+    "firewall": "Block the network route {u} → {v}",
+    "network": "Restrict the network route {u} → {v}",
+    "service": "Restrict the exposed service on {v}",
+    "port": "Close / restrict the exposed port on {v}",
+    "trust": "Revoke the trust relationship {u} → {v}",
+    "identity": "Revoke identity trust {u} → {v}",
+    "permission": "Revoke excessive permission {u} → {v}",
+}
+
+
+def _action(basis, u, v, control, via):
+    """Honest remediation verb: exploit steps get 'Remediate <vuln>'; other steps get the
+    control-specific action for their edge type."""
     if basis == "exploit":
-        return f"Remediate: {via} on {dst}"
-    if internet:
-        return f"Restrict Internet exposure of {dst}"
-    return f"Restrict / segment network access to {dst}"
+        return f"Remediate: {via} on {v}"
+    return CONTROL_ACTION.get(control, "Restrict access {u} → {v}").format(u=u, v=v)
 
 
 def _criticality(fs):
@@ -118,66 +131,110 @@ def _internet_facing(fs):
     return any(k in _text(fs) for k in WEB_HINTS)
 
 
-def build_web_graph(findings):
-    """Build nodes + edges + attack paths + explicit assumptions from raw findings."""
-    hf = _host_findings(findings)
-    nodes = [{"id": "Internet", "criticality": 0, "internet_facing": False, "kind": "internet", "findings": 0}]
-    assumptions = []
-    facing = []
+def _norm_name(n):
+    n = str(n or "").strip()
+    return "Internet" if n.lower() == "internet" else n
 
-    for h, fs in hf.items():
-        crit = _criticality(fs)
-        face = _internet_facing(fs)
+
+def build_web_graph(findings, topology=None):
+    """Build nodes + edges + attack paths from findings, optionally using a USER-SUPPLIED
+    topology (real connections between assets). With supplied topology, a path that uses only
+    supplied edges AND has an exploitable finding at every hop is CONFIRMED; without it,
+    connectivity is inferred and every path is hypothetical."""
+    hf = _host_findings(findings)
+    assumptions = []
+
+    # Optional criticality overrides + supplied edges from a topology file.
+    asset_over, supplied = {}, []
+    if isinstance(topology, dict):
+        for name, meta in (topology.get("assets") or {}).items():
+            if isinstance(meta, dict) and "criticality" in meta:
+                try:
+                    asset_over[_norm_name(name)] = int(meta["criticality"])
+                except (TypeError, ValueError):
+                    pass
+        for e in (topology.get("edges") or []):
+            if not isinstance(e, dict):
+                continue
+            u, v = _norm_name(e.get("from")), _norm_name(e.get("to"))
+            if u and v and u != v:
+                supplied.append((u, v, str(e.get("control") or "network").strip().lower()))
+    use_supplied = len(supplied) > 0
+
+    # ---- nodes ----
+    node_names = set(hf.keys())
+    for u, v, _ in supplied:
+        node_names.add(u); node_names.add(v)
+    node_names.discard("Internet")
+
+    def crit_of(name):
+        if name in asset_over:
+            return asset_over[name]
+        return _criticality(hf[name]) if name in hf else 2
+
+    nodes = [{"id": "Internet", "criticality": 0, "internet_facing": False, "kind": "internet", "findings": 0}]
+    facing = []
+    for name in node_names:
+        fs = hf.get(name, [])
+        crit = crit_of(name)
+        face = _internet_facing(fs) if fs else False
         if face:
-            facing.append(h)
-        kind = "database" if crit == 5 else ("web" if crit == 3 else "host")
-        nodes.append({"id": h, "criticality": crit, "internet_facing": face,
+            facing.append(name)
+        kind = "database" if crit >= 5 else ("web" if crit == 3 else "host")
+        nodes.append({"id": name, "criticality": crit, "internet_facing": face,
                       "kind": kind, "findings": len(fs)})
 
+    # ---- edges ----
     edges = []
 
-    def add_edge(u, v, internet=False):
-        basis, sev, via = _edge_basis(hf[v])
-        # exposure-only steps get a low, fixed likelihood (reachable, not proven exploitable);
-        # exploit steps scale with the vuln severity.
+    def make_edge(u, v, control, supplied_flag):
+        fs = hf.get(v, [])
+        basis, sev, via = _edge_basis(fs) if fs else ("exposure", "Unknown", "connection")
         like = SEV_EXPLOIT.get(sev.lower(), 0.1) if basis == "exploit" else 0.15
-        edges.append({"source": u, "target": v, "basis": basis, "topology": "inferred",
-                      "severity": sev, "exploit": like, "via": via, "assumed": True,
-                      "action": _action(basis, v, via, internet)})
+        edges.append({"source": u, "target": v, "basis": basis,
+                      "topology": "supplied" if supplied_flag else "inferred",
+                      "severity": sev, "exploit": like, "via": via,
+                      "assumed": not supplied_flag, "control": control,
+                      "action": _action(basis, u, v, control, via)})
 
-    if not facing:
-        facing = list(hf.keys())
-        assumptions.append("No clearly internet-facing service was detected, so every scanned host "
-                           "is treated as reachable from the Internet (assumption).")
+    if use_supplied:
+        for u, v, control in supplied:
+            make_edge(u, v, control, True)
+        assumptions.append("Topology is USER-SUPPLIED. A path that uses only supplied edges AND has an "
+                           "exploitable finding at every hop is CONFIRMED; others remain hypothetical.")
     else:
-        assumptions.append("Internet exposure was inferred from web/service findings; hosts without "
-                           "such findings are treated as internal-only.")
+        if not facing:
+            facing = list(hf.keys())
+            assumptions.append("No clearly internet-facing service was detected, so every scanned host "
+                               "is treated as reachable from the Internet (assumption).")
+        else:
+            assumptions.append("Internet exposure was inferred from web/service findings; hosts without "
+                               "such findings are treated as internal-only.")
+        for h in facing:
+            make_edge("Internet", h, "internet", False)
+        hosts = list(hf.keys())
+        lateral = False
+        for a in hosts:
+            for b in hosts:
+                if a == b:
+                    continue
+                sa, sb = _subnet(a), _subnet(b)
+                if sa and sb and sa == sb:
+                    make_edge(a, b, "lateral", False)
+                    lateral = True
+        if lateral:
+            assumptions.append("Lateral movement is assumed between hosts on the same /24 subnet; the "
+                               "reports do not prove these paths exist.")
+        assumptions.append("All paths are HYPOTHETICAL without a supplied topology: connectivity is "
+                           "inferred. 'Vuln-backed' = exploitable finding at every hop; 'exposure-only' "
+                           "= includes open-service steps. Upload a topology file for confirmed paths.")
 
-    for h in facing:
-        add_edge("Internet", h, internet=True)
-
-    hosts = list(hf.keys())
-    lateral = False
-    for a in hosts:
-        for b in hosts:
-            if a == b:
-                continue
-            sa, sb = _subnet(a), _subnet(b)
-            if sa and sb and sa == sb:
-                add_edge(a, b)
-                lateral = True
-    if lateral:
-        assumptions.append("Lateral movement is assumed between hosts on the same /24 subnet; the "
-                           "reports do not prove these paths exist.")
-    assumptions.append("Asset criticality is a heuristic (datastore = high, web/app = medium, other "
-                       "= low), not confirmed business value.")
-    assumptions.append("All paths are HYPOTHETICAL: topology is inferred, so no path is a confirmed "
-                       "attack path. 'Vuln-backed' paths have an exploitable finding at every hop; "
-                       "'exposure-only' paths include steps that are merely open services.")
+    assumptions.append("Asset criticality is a heuristic (datastore=high, web/app=medium, other=low) "
+                       "unless overridden in the topology file.")
 
     result = compute_paths(nodes, edges)
     result.update({"nodes": nodes, "edges": edges, "assumptions": assumptions,
-                   "scoring_version": SCORING_VERSION})
+                   "scoring_version": SCORING_VERSION, "topology_supplied": use_supplied})
     return result
 
 
@@ -190,7 +247,8 @@ def _graph_from(nodes, edges, skip=None):
             continue
         G.add_edge(e["source"], e["target"], exploit=e.get("exploit", 0.1),
                    severity=e.get("severity", "Unknown"), via=e.get("via", ""),
-                   basis=e.get("basis", "exposure"), action=e.get("action", ""))
+                   basis=e.get("basis", "exposure"), action=e.get("action", ""),
+                   topology=e.get("topology", "inferred"), control=e.get("control", ""))
     return G
 
 
@@ -214,14 +272,21 @@ def compute_paths(nodes, edges, skip=None):
                     like *= ed["exploit"]
                     steps.append({"from": p[i], "to": p[i + 1], "severity": ed["severity"],
                                   "via": ed["via"], "basis": ed.get("basis", "exposure"),
-                                  "action": ed.get("action", "")})
+                                  "action": ed.get("action", ""), "control": ed.get("control", ""),
+                                  "topology": ed.get("topology", "inferred")})
                 crit = crit_map.get(t, 1)
-                # Every path here is HYPOTHETICAL (topology is inferred, never supplied).
-                # vuln-backed = an exploitable vuln at every hop; exposure = >=1 open-service hop.
-                path_class = "vuln" if steps and all(s["basis"] == "exploit" for s in steps) else "exposure"
+                all_exploit = bool(steps) and all(s["basis"] == "exploit" for s in steps)
+                all_supplied = bool(steps) and all(s.get("topology") == "supplied" for s in steps)
+                # CONFIRMED needs real topology AND a real vuln at every hop; otherwise hypothetical.
+                if all_supplied and all_exploit:
+                    path_class = "confirmed"
+                elif all_exploit:
+                    path_class = "vuln"
+                else:
+                    path_class = "exposure"
                 paths.append({"path": p, "steps": steps, "target": t, "criticality": crit,
                               "likelihood": round(like * 100), "priority": round(crit * like * 100),
-                              "path_class": path_class, "confirmed": False})
+                              "path_class": path_class, "confirmed": path_class == "confirmed"})
                 reachable.add(t)
 
     paths.sort(key=lambda x: x["priority"], reverse=True)

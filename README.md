@@ -71,10 +71,12 @@ flowchart TD
 
 ## How the attack-path score works (and its honest limits)
 
-- Topology (who reaches whom) is **not** in a vulnerability report, so Sentinel **infers** it and states every assumption in the UI (internet-exposure from service findings; lateral movement within a /24; heuristic asset criticality). Inferred edges are labeled *assumed*.
-- Score is a **heuristic priority = asset criticality × path exploit-likelihood**, where each hop contributes an independent likelihood that *multiplies* along the path — so a longer chain scores **lower** (harder), and shared weaknesses aren't double-counted. It is a prioritization aid, **not** a breach probability.
+- **Evidence-qualified edges.** Each edge is typed by what the evidence supports: `exploit` (a real vuln/CVE enables the step) vs `exposure` (an open service only — reachable, not a proven transition). An open port never becomes a claimed attack step.
+- **Nothing is overclaimed.** Topology (who reaches whom) is **not** in a vulnerability report, so without a supplied topology Sentinel **infers** it and every path is labeled **hypothetical** (vuln-backed vs exposure-only), with all assumptions listed in the UI.
+- **Supplied topology → Confirmed paths.** Upload a small topology JSON (`{"edges":[{"from","to","control"}]}`) and paths that use only supplied edges *and* have an exploitable finding at every hop are marked **Confirmed**. `control` (firewall / service / trust / permission …) drives control-specific remediation actions ("Block network route", "Restrict service exposure", "Revoke permission").
+- **Score** is a **heuristic priority = asset criticality × path exploit-likelihood**, where each hop's likelihood *multiplies* along the path — so a longer chain scores **lower**, and shared weaknesses aren't double-counted. A prioritization aid, **not** a breach probability.
 
-Example: `Internet → web (C3) → DB (C5)` scores priority 405 (81%); the longer `Internet → web → host → DB` scores 203 (40%). Patching the web entry point drops reachable crown-jewels to zero.
+Example: with a supplied topology, `Internet → web01 → db01` (SQLi + MySQL CVE) is a **Confirmed** path; patching the web entry point drops reachable crown-jewels to zero. Without topology, the same findings yield **no** path — an honest result, not an invented one.
 
 ---
 

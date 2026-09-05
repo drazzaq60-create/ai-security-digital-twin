@@ -23,7 +23,24 @@ export default function Home() {
   const [runMeta, setRunMeta] = useState(null);
   const [elapsed, setElapsed] = useState(0);
   const [hideTagged, setHideTagged] = useState(false);
+  const [topology, setTopology] = useState(null);
+  const [topoName, setTopoName] = useState("");
   const inputRef = useRef(null);
+  const topoRef = useRef(null);
+
+  async function loadTopology(file) {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const obj = JSON.parse(text);
+      if (!obj || !Array.isArray(obj.edges)) throw new Error("missing an \"edges\" array");
+      setTopology(obj); setTopoName(file.name); setError("");
+    } catch (e) {
+      setTopology(null); setTopoName("");
+      setError(`Topology file invalid: ${(e && e.message) || "not JSON"}. Expected {"edges":[{"from","to","control"}]}.`);
+    }
+  }
+  function clearTopology() { setTopology(null); setTopoName(""); if (topoRef.current) topoRef.current.value = ""; }
   const abortRef = useRef(null);
   const timerRef = useRef(null);
 
@@ -202,7 +219,7 @@ export default function Home() {
           const gRes = await fetchStage(`${API_URL}/graph`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ findings: allFindings }),
+            body: JSON.stringify({ findings: allFindings, topology }),
           }, ac.signal);
           if (!gRes.ok) throw new Error(`graph failed (${gRes.status})`);
           const gData = await gRes.json();
@@ -404,6 +421,20 @@ export default function Home() {
             ))}
           </div>
         )}
+
+        <div className="side-label">Topology (optional)</div>
+        {!topoName ? (
+          <button className="topo-add" onClick={() => topoRef.current?.click()}>
+            ＋ Add topology JSON <span>for confirmed paths</span>
+          </button>
+        ) : (
+          <div className="file-row">
+            <span className="file-name">🗺 {topoName}</span>
+            <button className="x" aria-label="Remove topology" onClick={clearTopology}>×</button>
+          </div>
+        )}
+        <input ref={topoRef} type="file" accept=".json,application/json" hidden
+          onChange={(e) => loadTopology(e.target.files?.[0])} />
 
         <div className="side-label">Focus (optional)</div>
         <textarea className="focus" rows={3}
@@ -852,8 +883,11 @@ function AttackSurface({ graph, sim, simCut, onSimulate, onClear }) {
         <div className="paths-head">
           Potential paths to critical assets <span className="badge">{graph.paths.length}</span>
           <div className="paths-sub">
-            All paths are <b>hypothetical</b> — topology is inferred, not supplied. <b>Vuln-backed</b> =
-            an exploitable finding at every hop; <b>exposure-only</b> = includes steps that are just open services.
+            {graph.topology_supplied ? (
+              <><b>Confirmed</b> = supplied-topology edges + an exploitable finding at every hop. Others remain hypothetical.</>
+            ) : (
+              <>All paths are <b>hypothetical</b> — topology is inferred, not supplied. <b>Vuln-backed</b> = an exploitable finding at every hop; <b>exposure-only</b> = includes open-service steps. Upload a topology file for confirmed paths.</>
+            )}
           </div>
         </div>
         {graph.paths.length === 0 && (
@@ -863,8 +897,12 @@ function AttackSurface({ graph, sim, simCut, onSimulate, onClear }) {
         )}
         {graph.paths.map((pth, i) => (
           <div key={i} className="path-row">
-            <span className={`pclass ${pth.path_class === "vuln" ? "vuln" : "exposure"}`}>
-              {pth.path_class === "vuln" ? "HYPOTHETICAL · vuln-backed" : "HYPOTHETICAL · exposure-only"}
+            <span className={`pclass ${pth.path_class}`}>
+              {pth.path_class === "confirmed"
+                ? "CONFIRMED · topology-verified"
+                : pth.path_class === "vuln"
+                  ? "HYPOTHETICAL · vuln-backed"
+                  : "HYPOTHETICAL · exposure-only"}
             </span>
             <div className="path-line">
               {pth.path.map((h, j) => (
