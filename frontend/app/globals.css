@@ -45,6 +45,15 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
   color: #06231a; border: none; border-radius: 10px; padding: 13px; font-weight: 800; font-size: 15px; cursor: pointer; }
 .run:hover:not(:disabled) { box-shadow: 0 8px 22px rgba(16,185,129,.35); }
 .run:disabled { opacity: .6; cursor: not-allowed; }
+.run-row { display: flex; gap: 8px; margin-top: 20px; align-items: stretch; }
+.run-row .run { margin-top: 0; flex: 1; }
+.cancel { background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.4); color: #fca5a5;
+  border-radius: 10px; padding: 0 14px; font-weight: 700; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.cancel:hover { background: rgba(239,68,68,.22); }
+.retry-btn { margin-left: 10px; background: var(--panel); border: 1px solid var(--border); color: var(--mint-2);
+  border-radius: 7px; padding: 3px 10px; font-size: 12px; cursor: pointer; font-weight: 700; }
+.retry-btn:hover:not(:disabled) { border-color: var(--mint); }
+.retry-btn:disabled { opacity: .5; cursor: not-allowed; }
 .err-box { margin-top: 14px; background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3);
   color: #fca5a5; padding: 10px; border-radius: 8px; font-size: 13px; }
 

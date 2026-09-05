@@ -21,7 +21,32 @@ export default function Home() {
   const [dragging, setDragging] = useState(false);
   const [runs, setRuns] = useState([]);
   const [runMeta, setRunMeta] = useState(null);
+  const [elapsed, setElapsed] = useState(0);
   const inputRef = useRef(null);
+  const abortRef = useRef(null);
+  const timerRef = useRef(null);
+
+  const STAGE_TIMEOUT = 180000;  // per-stage cap (ms) — a hung request can't block forever
+
+  function errMsg(e) {
+    if (e?.name === "TimeoutError") return "timed out";
+    if (e?.name === "AbortError") return "cancelled";
+    return (e && e.message) || "error";
+  }
+
+  // fetch with a per-stage timeout, also abortable by the master cancel signal.
+  async function fetchStage(url, opts, extSignal) {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(new DOMException("timeout", "TimeoutError")), STAGE_TIMEOUT);
+    const onAbort = () => ctrl.abort(new DOMException("cancelled", "AbortError"));
+    if (extSignal) { if (extSignal.aborted) onAbort(); else extSignal.addEventListener("abort", onAbort); }
+    try {
+      return await fetch(url, { ...opts, signal: ctrl.signal });
+    } finally {
+      clearTimeout(to);
+      if (extSignal) extSignal.removeEventListener("abort", onAbort);
+    }
+  }
 
   async function loadRuns() {
     try {
@@ -43,91 +68,100 @@ export default function Home() {
     setLog((prev) => [...prev, { text, kind, t: new Date().toLocaleTimeString() }]);
   }
 
+  // One report's full pipeline (extract -> fixes). Reused by analyze() and retryReport().
+  async function analyzeOne(f, signal) {
+    const rep = {
+      name: f.name, findings: [], fixes: [], false_positives: [],
+      status: "ok", error: "", fixesFailed: false, security: null, parser: null,
+    };
+    logLine(`Extracting findings from ${f.name}…`);
+    try {
+      const form = new FormData();
+      form.append("file", f);
+      const eRes = await fetchStage(`${API_URL}/extract`, { method: "POST", body: form }, signal);
+      if (!eRes.ok) throw new Error(`extract failed (${eRes.status})`);
+      const eData = await eRes.json();
+      rep.name = eData.name || f.name;
+      rep.sha256 = eData.sha256 || null;
+      rep.parser = eData.parser || null;
+      rep.security = eData.security || null;
+      if (rep.parser && rep.parser.startsWith("deterministic:")) {
+        logLine(`⚡ ${rep.name}: parsed by ${rep.parser.split(":")[1]} parser (deterministic, no LLM)`, "ok");
+      }
+      if (rep.security?.injection_detected) {
+        logLine(`🛡️ ${rep.name}: prompt-injection detected — ${rep.security.count} attempt(s), ${rep.security.max_severity} severity (blocked, findings still extracted)`, "err");
+      }
+      if (eData.error) {
+        rep.status = "failed"; rep.error = eData.error;
+        logLine(`✗ ${rep.name}: ${eData.error}`, "err");
+        return rep;
+      }
+      rep.findings = eData.findings || [];
+      if (rep.findings.length === 0) {
+        rep.status = "empty";
+        logLine(`• ${rep.name}: no findings extracted`, "info");
+      } else {
+        logLine(`✓ ${rep.name}: ${rep.findings.length} findings`, "ok");
+      }
+    } catch (e) {
+      rep.status = "failed"; rep.error = errMsg(e);
+      logLine(`✗ ${rep.name}: ${rep.error}`, "err");
+      return rep;
+    }
+
+    if (rep.findings.length > 0) {
+      logLine(`Analyzing ${rep.name} (fixes + false positives)… waiting for model`);
+      try {
+        const rRes = await fetchStage(`${API_URL}/report-fixes`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: rep.name, findings: rep.findings, focus: message }),
+        }, signal);
+        if (!rRes.ok) throw new Error(`fixes failed (${rRes.status})`);
+        const rData = await rRes.json();
+        rep.fixes = rData.fixes || [];
+        rep.false_positives = rData.false_positives || [];
+      } catch (e) {
+        rep.fixesFailed = true;
+        logLine(`✗ ${rep.name}: fixes step failed (${errMsg(e)})`, "err");
+      }
+    }
+    return rep;
+  }
+
   async function analyze() {
     if (files.length === 0) { setError("Add at least one report file."); return; }
     setError(""); setRunning(true); setLog([]); setReports([]);
     setCorrelation(null); setCorrelationError("");
     setGraph(null); setGraphError(""); setSim(null); setSimCut(null); setRunMeta(null);
     const collected = [];
-    const allFindings = [];
+    let allFindings = [];
+
+    const ac = new AbortController();
+    abortRef.current = ac;
+    const startedAt = Date.now();
+    setElapsed(0);
+    clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => setElapsed(Math.round((Date.now() - startedAt) / 1000)), 1000);
 
     try {
       logLine(`Starting analysis of ${files.length} report(s) in parallel…`, "start");
 
-      // Each report runs as an independent pipeline (extract -> fixes) CONCURRENTLY.
-      // One failure never aborts the others; the backend handles the parallel requests.
+      // Each report runs its own pipeline CONCURRENTLY; one failure never aborts the rest.
       const results = new Array(files.length);
-      const commit = () => setReports(results.filter(Boolean));
-
       await Promise.all(files.map(async (f, idx) => {
-        const rep = {
-          name: f.name, findings: [], fixes: [], false_positives: [],
-          status: "ok", error: "", fixesFailed: false, security: null, parser: null,
-        };
-
-        logLine(`Extracting findings from ${f.name}…`);
-        try {
-          const form = new FormData();
-          form.append("file", f);
-          const eRes = await fetch(`${API_URL}/extract`, { method: "POST", body: form });
-          if (!eRes.ok) throw new Error(`extract failed (${eRes.status})`);
-          const eData = await eRes.json();
-          rep.name = eData.name || f.name;
-          rep.sha256 = eData.sha256 || null;
-          rep.parser = eData.parser || null;
-          rep.security = eData.security || null;
-          if (rep.parser && rep.parser.startsWith("deterministic:")) {
-            logLine(`⚡ ${rep.name}: parsed by ${rep.parser.split(":")[1]} parser (deterministic, no LLM)`, "ok");
-          }
-          if (rep.security?.injection_detected) {
-            logLine(`🛡️ ${rep.name}: prompt-injection detected — ${rep.security.count} attempt(s), ${rep.security.max_severity} severity (blocked, findings still extracted)`, "err");
-          }
-
-          if (eData.error) {
-            rep.status = "failed"; rep.error = eData.error;
-            logLine(`✗ ${rep.name}: ${eData.error}`, "err");
-            results[idx] = rep; commit(); return;
-          }
-          rep.findings = eData.findings || [];
-          if (rep.findings.length === 0) {
-            rep.status = "empty";
-            logLine(`• ${rep.name}: no findings extracted`, "info");
-          } else {
-            logLine(`✓ ${rep.name}: ${rep.findings.length} findings`, "ok");
-          }
-        } catch (e) {
-          rep.status = "failed"; rep.error = (e && e.message) || "extract error";
-          logLine(`✗ ${rep.name}: ${rep.error}`, "err");
-          results[idx] = rep; commit(); return;
-        }
-
-        // Show findings + security scan result immediately; fixes fill in when ready.
-        results[idx] = rep; commit();
-
-        // Per-report fixes — only if this report actually produced findings.
-        if (rep.findings.length > 0) {
-          logLine(`Analyzing ${rep.name} (fixes + false positives)…`);
-          try {
-            const rRes = await fetch(`${API_URL}/report-fixes`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ name: rep.name, findings: rep.findings, focus: message }),
-            });
-            if (!rRes.ok) throw new Error(`fixes failed (${rRes.status})`);
-            const rData = await rRes.json();
-            rep.fixes = rData.fixes || [];
-            rep.false_positives = rData.false_positives || [];
-          } catch (e) {
-            rep.fixesFailed = true;
-            logLine(`✗ ${rep.name}: fixes step failed (${(e && e.message) || "error"})`, "err");
-          }
-          allFindings.push(...rep.findings);
-        }
-
-        results[idx] = rep; commit();
+        const rep = await analyzeOne(f, ac.signal);
+        results[idx] = rep;
+        setReports(results.filter(Boolean));  // incremental
       }));
 
       results.filter(Boolean).forEach((r) => collected.push(r));
+      allFindings = collected.flatMap((r) => r.findings || []);
+
+      if (ac.signal.aborted) {
+        logLine("Analysis cancelled — correlation, graph and save skipped.", "err");
+        return;
+      }
 
       let corrOut = null, graphOut = null;  // captured for auto-save
 
@@ -136,11 +170,11 @@ export default function Home() {
       if (withFindings >= 2) {
         logLine("Correlating across all reports…");
         try {
-          const cRes = await fetch(`${API_URL}/correlate`, {
+          const cRes = await fetchStage(`${API_URL}/correlate`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ findings: allFindings }),
-          });
+          }, ac.signal);
           if (!cRes.ok) throw new Error(`correlate failed (${cRes.status})`);
           const cData = await cRes.json();
           corrOut = cData.correlation || {};
@@ -153,8 +187,8 @@ export default function Home() {
           );
         } catch (e) {
           // A failed correlation is NOT evidence that reports are unrelated. Say it failed.
-          setCorrelationError((e && e.message) || "correlate error");
-          logLine(`✗ Correlation failed — not a conclusion, the request errored`, "err");
+          setCorrelationError(errMsg(e));
+          logLine(`✗ Correlation ${errMsg(e)} — not a conclusion, the request errored`, "err");
         }
       } else {
         logLine("Correlation skipped — needs 2+ reports with findings", "info");
@@ -164,11 +198,11 @@ export default function Home() {
       if (allFindings.length > 0) {
         logLine("Building attack-surface graph…");
         try {
-          const gRes = await fetch(`${API_URL}/graph`, {
+          const gRes = await fetchStage(`${API_URL}/graph`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ findings: allFindings }),
-          });
+          }, ac.signal);
           if (!gRes.ok) throw new Error(`graph failed (${gRes.status})`);
           const gData = await gRes.json();
           graphOut = gData;
@@ -179,8 +213,8 @@ export default function Home() {
             "ok"
           );
         } catch (e) {
-          setGraphError((e && e.message) || "graph error");
-          logLine(`✗ Attack-surface graph failed: ${(e && e.message) || "error"}`, "err");
+          setGraphError(errMsg(e));
+          logLine(`✗ Attack-surface graph failed: ${errMsg(e)}`, "err");
         }
       }
 
@@ -201,10 +235,34 @@ export default function Home() {
         loadRuns();
       } catch { /* best-effort */ }
     } catch (e) {
-      const m = (e && e.message) || "error";
-      setError(`${m} — is the backend running on :8000?`);
+      const m = errMsg(e);
+      if (m !== "cancelled") setError(`${m} — is the backend running on :8000?`);
       logLine(`✗ ${m}`, "err");
     } finally {
+      clearInterval(timerRef.current);
+      abortRef.current = null;
+      setRunning(false);
+    }
+  }
+
+  function cancelAnalysis() {
+    abortRef.current?.abort(new DOMException("cancelled", "AbortError"));
+    logLine("Cancelling…", "err");
+  }
+
+  async function retryReport(name) {
+    const f = files.find((x) => x.name === name);
+    if (!f) { setError(`Can't retry "${name}" — re-add the file and run again.`); return; }
+    const ac = new AbortController();
+    abortRef.current = ac;
+    setRunning(true);
+    logLine(`Retrying ${name}…`, "start");
+    try {
+      const rep = await analyzeOne(f, ac.signal);
+      setReports((prev) => prev.map((r) => (r.name === name ? rep : r)));
+      logLine(`Retry of ${name} finished (${rep.status})`, rep.status === "failed" ? "err" : "done");
+    } finally {
+      abortRef.current = null;
       setRunning(false);
     }
   }
@@ -318,9 +376,14 @@ export default function Home() {
           placeholder="e.g. what are the critical findings?"
           value={message} onChange={(e) => setMessage(e.target.value)} />
 
-        <button className="run" onClick={analyze} disabled={running}>
-          {running ? "Analyzing…" : "▶ Run Analysis"}
-        </button>
+        {!running ? (
+          <button className="run" onClick={analyze}>▶ Run Analysis</button>
+        ) : (
+          <div className="run-row">
+            <button className="run" disabled>Analyzing… ⏱ {elapsed}s</button>
+            <button className="cancel" onClick={cancelAnalysis}>✕ Cancel</button>
+          </div>
+        )}
         {error && <div className="err-box">{error}</div>}
 
         {runs.length > 0 && (
@@ -459,7 +522,12 @@ export default function Home() {
               {okReports.map((r, i) => (
                 <div key={i} className="fix-report">
                   <h4>📄 {r.name}</h4>
-                  {r.fixesFailed && <p className="fail-inline">⚠ Fixes step failed for this report — re-run to retry.</p>}
+                  {r.fixesFailed && (
+                    <p className="fail-inline">
+                      ⚠ Fixes step failed for this report.
+                      <button className="retry-btn" onClick={() => retryReport(r.name)} disabled={running}>↻ Retry</button>
+                    </p>
+                  )}
                   {!r.fixesFailed && r.fixes.length === 0 && <p className="muted">No fixes generated for this report.</p>}
                   <ol>{r.fixes.map((fx, j) => <li key={j}>{fx}</li>)}</ol>
                 </div>
@@ -541,7 +609,12 @@ export default function Home() {
                     </span>
                   )}
                 </summary>
-                {r.status === "failed" && <div className="fail-box">⚠ {r.error}</div>}
+                {r.status === "failed" && (
+                  <div className="fail-box">
+                    ⚠ {r.error}
+                    <button className="retry-btn" onClick={() => retryReport(r.name)} disabled={running}>↻ Retry</button>
+                  </div>
+                )}
                 {r.findings?.length > 0 && (
                   <table className="ftable">
                     <tbody>
