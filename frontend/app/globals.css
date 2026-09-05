@@ -29,7 +29,16 @@ html, body { margin: 0; padding: 0; color: var(--text);
 .shell { display: flex; min-height: 100vh; }
 
 .rail { width: 212px; flex-shrink: 0; background: var(--side); border-right: 1px solid var(--border);
-  display: flex; flex-direction: column; gap: 3px; padding: 14px 10px; position: sticky; top: 0; height: 100vh; }
+  display: flex; flex-direction: column; gap: 3px; padding: 14px 10px; position: sticky; top: 0; height: 100vh;
+  transition: width .18s ease; }
+.rail-toggle { align-self: flex-end; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+  width: 26px; height: 26px; border-radius: 7px; cursor: pointer; font-size: 14px; line-height: 1; margin-bottom: 4px; }
+.rail-toggle:hover { border-color: var(--mint); color: var(--mint-2); }
+.rail.collapsed { width: 64px; }
+.rail.collapsed .rl-txt, .rail.collapsed .rail-item span, .rail.collapsed .rail-foot, .rail.collapsed .lock { display: none; }
+.rail.collapsed .rail-item { justify-content: center; padding: 11px 0; }
+.rail.collapsed .rail-logo { justify-content: center; padding: 6px 0 14px; }
+.rail.collapsed .rail-toggle { align-self: center; }
 .rail-logo { display: flex; align-items: center; gap: 10px; padding: 8px 10px 18px; }
 .rl-icon { width: 27px; height: 27px; flex-shrink: 0; filter: drop-shadow(0 2px 6px rgba(8,145,201,.35)); }
 .rl-txt { line-height: 1.15; min-width: 0; }

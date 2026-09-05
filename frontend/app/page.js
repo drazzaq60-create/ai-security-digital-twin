@@ -217,6 +217,7 @@ export default function Home() {
 
   const [backendUp, setBackendUp] = useState(null);  // null=unknown, true/false
   const [nav, setNav] = useState("scan");
+  const [railOpen, setRailOpen] = useState(true);
   const [scanMode, setScanMode] = useState("manual");  // manual (report upload) | auto (live scan, future)
   const [cmpA, setCmpA] = useState("");
   const [cmpB, setCmpB] = useState("");
@@ -595,7 +596,8 @@ export default function Home() {
 
   return (
     <div className="shell">
-      <nav className="rail">
+      <nav className={`rail ${railOpen ? "" : "collapsed"}`}>
+        <button className="rail-toggle" onClick={() => setRailOpen((o) => !o)} title={railOpen ? "Collapse sidebar" : "Expand sidebar"}>{railOpen ? "«" : "»"}</button>
         <div className="rail-logo">
           <svg className="rl-icon" viewBox="0 0 24 24" aria-hidden="true">
             <defs><linearGradient id="sg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#22c1e8" /><stop offset="1" stopColor="#0369a1" /></linearGradient></defs>
