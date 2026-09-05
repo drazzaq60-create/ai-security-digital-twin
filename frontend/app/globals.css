@@ -233,6 +233,12 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
   color: var(--muted); padding: 11px; font-size: 13px; cursor: pointer; text-align: center; }
 .topo-add:hover { border-color: var(--mint); color: var(--mint-2); }
 .topo-add span { color: #64748b; font-size: 11.5px; }
+.topo-note { margin-top: 8px; font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+.topo-note b { color: var(--mint-2); }
+.topo-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
+.linklike { background: none; border: none; padding: 0; color: var(--mint-2); cursor: pointer;
+  font-size: 11.5px; font-weight: 600; }
+.linklike:hover { text-decoration: underline; }
 .cutbtn.b-exposure { background: rgba(148,163,184,.08); border-color: rgba(148,163,184,.3); color: #cbd5e1; }
 .cutbtn.b-exposure:hover { background: rgba(148,163,184,.18); }
 .path-row { border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin-bottom: 10px; background: var(--panel-2); }

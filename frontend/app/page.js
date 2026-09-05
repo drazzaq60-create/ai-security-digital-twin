@@ -41,6 +41,73 @@ export default function Home() {
     }
   }
   function clearTopology() { setTopology(null); setTopoName(""); if (topoRef.current) topoRef.current.value = ""; }
+
+  function downloadJson(obj, filename) {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadTemplate() {
+    downloadJson({
+      _comment: "Topology = which asset can reach which (from your network/firewall knowledge; no scanner produces this). control: firewall | network | service | port | trust | identity | permission. Replace the example hosts with yours.",
+      assets: { db01: { criticality: 5 } },
+      edges: [
+        { from: "internet", to: "web01", control: "firewall" },
+        { from: "web01", to: "db01", control: "service" },
+      ],
+    }, "topology-template.json");
+  }
+
+  // Rebuild ONLY the graph (no re-extraction) using the given topology — instant.
+  async function rebuildGraph(topo) {
+    const allFindings = reports.flatMap((r) => r.findings || []);
+    if (!allFindings.length) return;
+    try {
+      const gRes = await fetch(`${API_URL}/graph`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ findings: allFindings, topology: topo }),
+      });
+      if (gRes.ok) {
+        const g = await gRes.json();
+        setGraph(g); setGraphError(""); setSim(null); setSimCut(null);
+        logLine(`✓ Graph rebuilt with ${topo ? "supplied" : "inferred"} topology: ${g.paths?.length || 0} path(s)`, "ok");
+      }
+    } catch { /* best-effort */ }
+  }
+
+  // Auto-draft a topology from the hosts found in the reports (Internet -> web -> app -> db).
+  // Suggested/inferred, not confirmed — the user reviews and can edit it.
+  function suggestTopology() {
+    const nodes = (graph?.nodes || []).filter((n) => n.id !== "Internet");
+    if (nodes.length === 0) { setError("Run an analysis first — then I can suggest a topology from the findings."); return; }
+    const web = nodes.filter((n) => n.kind === "web").map((n) => n.id);
+    const db = nodes.filter((n) => n.kind === "database").map((n) => n.id);
+    const other = nodes.filter((n) => n.kind !== "web" && n.kind !== "database").map((n) => n.id);
+    let entry = web;
+    if (entry.length === 0) entry = nodes.filter((n) => n.internet_facing).map((n) => n.id);
+    if (entry.length === 0) entry = [nodes[0].id];
+
+    const edges = [];
+    const seen = new Set();
+    const addE = (f, t, c) => { const k = f + ">" + t; if (f !== t && !seen.has(k)) { seen.add(k); edges.push({ from: f, to: t, control: c }); } };
+    entry.forEach((w) => addE("internet", w, "firewall"));
+    entry.forEach((w) => { other.forEach((o) => addE(w, o, "service")); db.forEach((d) => addE(w, d, "service")); });
+    other.forEach((o) => db.forEach((d) => addE(o, d, "service")));
+
+    const assets = {};
+    nodes.forEach((n) => { if (n.criticality) assets[n.id] = { criticality: n.criticality }; });
+    const topo = {
+      _comment: "SUGGESTED from report findings — connections are inferred, not confirmed. Review and edit before trusting the paths.",
+      assets, edges,
+    };
+    setTopology(topo); setTopoName("suggested-topology.json"); setError("");
+    logLine(`Suggested a topology: ${edges.length} connection(s) across ${nodes.length} asset(s). Rebuilding graph…`, "info");
+    rebuildGraph(topo);
+  }
   const abortRef = useRef(null);
   const timerRef = useRef(null);
 
@@ -433,6 +500,15 @@ export default function Home() {
             <button className="x" aria-label="Remove topology" onClick={clearTopology}>×</button>
           </div>
         )}
+        <div className="topo-note">
+          No scanner outputs this — it maps which assets can reach which (from your
+          network/firewall knowledge). Paths that use it become <b>Confirmed</b>.
+          <div className="topo-links">
+            <button className="linklike" onClick={downloadTemplate}>Download template</button>
+            {graph?.nodes?.length > 1 && <button className="linklike" onClick={suggestTopology}>Suggest from reports</button>}
+            {topoName && <button className="linklike" onClick={() => downloadJson(topology, topoName)}>Download current</button>}
+          </div>
+        </div>
         <input ref={topoRef} type="file" accept=".json,application/json" hidden
           onChange={(e) => loadTopology(e.target.files?.[0])} />
 
