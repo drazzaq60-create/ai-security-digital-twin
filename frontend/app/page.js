@@ -603,7 +603,7 @@ export default function Home() {
             <path d="M8.4 12 L11 14.6 L16 8.6" fill="none" stroke="#fff" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
           <div className="rl-txt">
-            <div className="rl-word">SENTINEL<b>SEC</b></div>
+            <div className="rl-word">SENTINEL</div>
             <div className="rl-tag">Security Console</div>
           </div>
         </div>
