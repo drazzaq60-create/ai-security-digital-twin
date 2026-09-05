@@ -1,0 +1,12 @@
+# Slim dependencies for DEPLOYING the FastAPI backend (api.py).
+# The web API does NOT use chromadb / streamlit / matplotlib / groq (those are only for
+# the local M2 RAG + old dashboard), so they're excluded here for a faster, more reliable
+# build on free hosting tiers. For local dev with everything, use requirements.txt.
+fastapi
+uvicorn
+python-multipart
+pypdf
+fpdf2
+google-genai
+python-dotenv
+networkx
