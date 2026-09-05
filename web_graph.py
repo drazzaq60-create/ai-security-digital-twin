@@ -26,6 +26,7 @@ WEB_HINTS = ("http", "https", "apache", "nginx", "tomcat", "iis", "web", "port 8
              "port 443", "8080", "8443", "django", "express", "php", "wordpress")
 
 CRIT_ASSET = 4  # criticality >= this counts as a "crown jewel" target
+SCORING_VERSION = "1.0"  # bump when the graph/scoring logic changes (recorded in run provenance)
 
 
 def _is_ip(h):
@@ -131,7 +132,8 @@ def build_web_graph(findings):
                        "= low), not confirmed business value.")
 
     result = compute_paths(nodes, edges)
-    result.update({"nodes": nodes, "edges": edges, "assumptions": assumptions})
+    result.update({"nodes": nodes, "edges": edges, "assumptions": assumptions,
+                   "scoring_version": SCORING_VERSION})
     return result
 
 

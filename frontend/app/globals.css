@@ -142,6 +142,25 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
 .gr-out { margin-top: 8px; font-size: 12px; padding: 6px 10px; border-radius: 7px; }
 .gr-out.ok { color: var(--mint-2); background: rgba(16,185,129,.07); border: 1px solid rgba(16,185,129,.25); }
 .gr-out.fail { color: #fca5a5; background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.35); }
+.gr-summary { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.grs { font-size: 12px; font-weight: 700; border-radius: 999px; padding: 3px 11px; }
+.grs.ok { color: var(--mint-2); background: rgba(16,185,129,.1); border: 1px solid rgba(16,185,129,.3); }
+.grs.bad { color: #fca5a5; background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.35); }
+.grs.na { color: var(--muted); background: rgba(148,163,184,.1); border: 1px solid rgba(148,163,184,.3); }
+.gr-note { margin-top: 10px; font-size: 12.5px; color: #cbd5e1; background: rgba(148,163,184,.08);
+  border: 1px solid rgba(148,163,184,.25); border-radius: 9px; padding: 9px 13px; }
+.gr-note b { color: var(--text); }
+
+/* Run provenance */
+.prov { padding: 14px 18px; font-size: 13px; line-height: 1.9; }
+.prov .pk { display: inline-block; min-width: 96px; color: var(--muted); font-size: 11px;
+  text-transform: uppercase; letter-spacing: .5px; font-weight: 700; }
+.prov-files { margin-top: 4px; }
+.ptable { width: 100%; border-collapse: collapse; margin-top: 6px; }
+.ptable td { padding: 5px 8px; border-top: 1px solid var(--border); font-size: 12.5px; }
+.ptable .mono { font-family: ui-monospace, monospace; color: var(--muted); }
+.prov-ok { color: var(--mint-2); }
+.prov-na { color: var(--muted); }
 
 /* Evidence quote under a finding name */
 .eviq { color: var(--muted); font-size: 11.5px; font-style: italic; margin-top: 3px; line-height: 1.4; }

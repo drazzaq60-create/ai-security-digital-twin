@@ -20,6 +20,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
   const [runs, setRuns] = useState([]);
+  const [runMeta, setRunMeta] = useState(null);
   const inputRef = useRef(null);
 
   async function loadRuns() {
@@ -46,7 +47,7 @@ export default function Home() {
     if (files.length === 0) { setError("Add at least one report file."); return; }
     setError(""); setRunning(true); setLog([]); setReports([]);
     setCorrelation(null); setCorrelationError("");
-    setGraph(null); setGraphError(""); setSim(null); setSimCut(null);
+    setGraph(null); setGraphError(""); setSim(null); setSimCut(null); setRunMeta(null);
     const collected = [];
     const allFindings = [];
 
@@ -72,6 +73,7 @@ export default function Home() {
           if (!eRes.ok) throw new Error(`extract failed (${eRes.status})`);
           const eData = await eRes.json();
           rep.name = eData.name || f.name;
+          rep.sha256 = eData.sha256 || null;
           rep.security = eData.security || null;
           if (rep.security?.injection_detected) {
             logLine(`🛡️ ${rep.name}: prompt-injection detected — ${rep.security.count} attempt(s), ${rep.security.max_severity} severity (blocked, findings still extracted)`, "err");
@@ -184,13 +186,14 @@ export default function Home() {
         failed > 0 ? "err" : "done"
       );
 
-      // Auto-save this analysis so it can be reloaded from History later.
+      // Auto-save this analysis (with provenance) so it can be reloaded from History later.
       try {
-        await fetch(`${API_URL}/runs`, {
+        const sRes = await fetch(`${API_URL}/runs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ reports: collected, correlation: corrOut, graph: graphOut }),
         });
+        if (sRes.ok) { const sd = await sRes.json(); setRunMeta(sd.meta || null); }
         loadRuns();
       } catch { /* best-effort */ }
     } catch (e) {
@@ -249,6 +252,7 @@ export default function Home() {
       setCorrelationError("");
       setGraph(d.graph || null);
       setGraphError(""); setSim(null); setSimCut(null); setError("");
+      setRunMeta(d.meta || null);
       setLog([{ text: `Loaded saved analysis ${id}`, kind: "done", t: new Date().toLocaleTimeString() }]);
     } catch { /* ignore */ }
   }
@@ -256,10 +260,16 @@ export default function Home() {
   const okReports = reports.filter((r) => r.status !== "failed");
   const totalFindings = reports.reduce((n, r) => n + (r.findings?.length || 0), 0);
   const failedCount = reports.filter((r) => r.status === "failed").length;
+  // A report was security-EVALUATED only if it carries a real scan result.
+  const secEvaluated = (r) => r.security && typeof r.security.injection_detected === "boolean";
+  const secFlagged = (r) => secEvaluated(r) && (r.security.injection_detected || r.security.output_ok === false);
   const injectionReports = reports.filter((r) => r.security?.injection_detected);
-  const flaggedReports = reports.filter(
-    (r) => r.security && (r.security.injection_detected || r.security.output_ok === false)
-  );
+  const flaggedReports = reports.filter(secFlagged);
+  const passedReports = reports.filter((r) => secEvaluated(r) && !secFlagged(r));
+  const notEvalReports = reports.filter((r) => !secEvaluated(r));
+  // Only claim the L3 output check ran if every passed report actually has that result.
+  const l3RanForAllPassed = passedReports.length > 0 &&
+    passedReports.every((r) => typeof r.security.output_ok === "boolean");
   const related = !!correlation?.related && !correlationError;
   const commonFixes = related ? (correlation?.common_fixes || []) : [];
   const nConfirmed = related ? (correlation?.confirmed?.length || 0) : 0;
@@ -352,39 +362,87 @@ export default function Home() {
           </div>
         </div>
 
+        {/* Provenance — makes a saved/restored analysis self-describing and auditable. */}
+        {runMeta && (
+          <div className="panel">
+            <div className="panel-head">🧾 Run Provenance</div>
+            <div className="prov">
+              <div><span className="pk">Analyzed</span> {runMeta.created ? new Date(runMeta.created * 1000).toLocaleString() : "—"}</div>
+              <div><span className="pk">Model</span> {runMeta.model}</div>
+              <div>
+                <span className="pk">Topology</span> {runMeta.topology}
+                {runMeta.topology === "inferred" && <span className="muted"> (inferred — assumptions listed in the graph panel)</span>}
+              </div>
+              <div><span className="pk">Versions</span> scoring v{runMeta.scoring_version} · app v{runMeta.app_version}</div>
+              {(runMeta.files || []).length > 0 && (
+                <div className="prov-files">
+                  <span className="pk">Source files</span>
+                  <table className="ptable"><tbody>
+                    {runMeta.files.map((f, i) => (
+                      <tr key={i}>
+                        <td>{f.name}</td>
+                        <td className="mono">{f.sha256 ? f.sha256.slice(0, 12) + "…" : "—"}</td>
+                        <td>{f.findings} findings</td>
+                        <td className={f.security_evaluated ? "prov-ok" : "prov-na"}>
+                          {f.security_evaluated ? "✓ security checked" : "• not checked"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody></table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Guardrails — LLM security. Shows prompt-injection scan results per report. */}
         {reports.length > 0 && (
           <div className="panel">
             <div className="panel-head">🛡️ Guardrails — LLM Security</div>
-            {flaggedReports.length === 0 ? (
-              <div className="gr-clean">✓ No prompt-injection detected, and every AI response passed the output check. Reports are scanned before the model reads them (L1), fed in as data not instructions (L2), and each response is checked for hijack/leak (L3).</div>
-            ) : (
-              <div className="gr-body">
-                <div className="gr-warn">
-                  ⚠️ Security events in {flaggedReports.length} report(s).
-                  Attacks were detected and the model was hardened against them — real findings were still extracted.
-                </div>
-                {flaggedReports.map((r, i) => (
-                  <div key={i} className="gr-report">
-                    <div className="gr-name">
-                      📄 {r.name}
-                      {r.security.injection_detected && <span className="gr-sev">{r.security.count} injection attempt(s) · {r.security.max_severity}</span>}
-                    </div>
-                    {(r.security.detections || []).map((d, j) => (
-                      <div key={j} className="gr-det">
-                        <span className={`gr-tech t-${(d.severity || "").toLowerCase()}`}>{d.technique}</span>
-                        <code className="gr-snip">{d.snippet}</code>
-                      </div>
-                    ))}
-                    {r.security.output_ok === false ? (
-                      <div className="gr-out fail">⚠ Output check FAILED — {r.security.output_reason}. The model's reply looked suspicious; review this report (possible successful injection).</div>
-                    ) : (
-                      <div className="gr-out ok">✓ Output check passed — no sign of hijack or prompt leak in the model's reply.</div>
-                    )}
-                  </div>
-                ))}
+            <div className="gr-body">
+              <div className="gr-summary">
+                {passedReports.length > 0 && <span className="grs ok">✓ {passedReports.length} passed</span>}
+                {flaggedReports.length > 0 && <span className="grs bad">⚠ {flaggedReports.length} flagged</span>}
+                {notEvalReports.length > 0 && <span className="grs na">• {notEvalReports.length} not evaluated</span>}
               </div>
-            )}
+
+              {flaggedReports.map((r, i) => (
+                <div key={i} className="gr-report">
+                  <div className="gr-name">
+                    📄 {r.name}
+                    {r.security.injection_detected && <span className="gr-sev">{r.security.count} injection attempt(s) · {r.security.max_severity}</span>}
+                  </div>
+                  {(r.security.detections || []).map((d, j) => (
+                    <div key={j} className="gr-det">
+                      <span className={`gr-tech t-${(d.severity || "").toLowerCase()}`}>{d.technique}</span>
+                      <code className="gr-snip">{d.snippet}</code>
+                    </div>
+                  ))}
+                  {r.security.output_ok === false ? (
+                    <div className="gr-out fail">⚠ Output check FAILED — {r.security.output_reason}. The model's reply looked suspicious; review this report (possible successful injection).</div>
+                  ) : typeof r.security.output_ok === "boolean" ? (
+                    <div className="gr-out ok">✓ Output check passed — no sign of hijack or prompt leak in the model's reply.</div>
+                  ) : null}
+                </div>
+              ))}
+
+              {notEvalReports.length > 0 && (
+                <div className="gr-note">
+                  • {notEvalReports.length} report(s) <b>not evaluated</b> — no scan metadata (an unreadable/empty file, or a run saved before guardrails existed). This is <b>not</b> a pass.
+                </div>
+              )}
+
+              {flaggedReports.length === 0 && passedReports.length > 0 && (
+                <div className="gr-clean">
+                  ✓ {passedReports.length} report(s) passed — scanned for injection (L1) and hardened so report text is treated as data not instructions (L2)
+                  {l3RanForAllPassed ? "; responses also passed the output check (L3)." : "."}
+                </div>
+              )}
+
+              {passedReports.length === 0 && flaggedReports.length === 0 && (
+                <div className="gr-note">No reports were security-evaluated in this run.</div>
+              )}
+            </div>
           </div>
         )}
 

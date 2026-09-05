@@ -12,6 +12,7 @@
 # freezing every other request (including /health) until it returns. So every blocking
 # call is pushed to a worker thread with run_in_threadpool.
 
+import hashlib
 import io
 import json
 import os
@@ -30,8 +31,9 @@ import cache
 import guardrails
 from web_graph import build_web_graph, simulate_cut
 from report_export import build_pdf
-from llm import call_llm, FAST_MODELS
+from llm import call_llm, FAST_MODELS, GEMINI_MODELS
 
+APP_VERSION = "0.5"
 RUNS_DIR = os.path.join(os.path.dirname(__file__), "runs")
 os.makedirs(RUNS_DIR, exist_ok=True)
 
@@ -73,10 +75,11 @@ async def extract(file: UploadFile = File(...)):
     Returns an explicit `error` (and empty findings) when the file can't be read, instead
     of inventing an "Unknown" finding that would inflate the counts."""
     raw = await file.read()
+    sha256 = hashlib.sha256(raw).hexdigest()  # provenance: which exact file was analyzed
     text = read_report(raw, file.filename)
     if len(text.strip()) < 30:
         return {
-            "name": file.filename, "findings": [],
+            "name": file.filename, "findings": [], "sha256": sha256,
             "error": "Could not extract readable text (possibly a scanned / image-only PDF, "
                      "an empty file, or an unsupported binary format).",
         }
@@ -88,7 +91,8 @@ async def extract(file: UploadFile = File(...)):
     findings, out_check = await run_in_threadpool(extract_findings, text, file.filename, True)
     security["output_ok"] = out_check.get("ok", True)
     security["output_reason"] = out_check.get("reason", "")
-    return {"name": file.filename, "findings": findings, "error": None, "security": security}
+    return {"name": file.filename, "findings": findings, "sha256": sha256,
+            "error": None, "security": security}
 
 
 class ReportBody(BaseModel):
@@ -191,15 +195,41 @@ def export_report(body: RunBody):
                     headers={"Content-Disposition": 'attachment; filename="sentinel-report.pdf"'})
 
 
+def _build_meta(data):
+    """Provenance for a saved analysis - so a restored run is self-describing and auditable."""
+    reports = data.get("reports", []) or []
+    graph = data.get("graph") or {}
+    assumed = any(e.get("assumed") for e in (graph.get("edges") or []))
+    return {
+        "created": time.time(),
+        "model": "Gemini (per-call fallback across the flash family)",
+        "model_chain": GEMINI_MODELS,
+        "app_version": APP_VERSION,
+        "scoring_version": graph.get("scoring_version", "n/a"),
+        "topology": "inferred" if assumed else ("supplied" if graph else "n/a"),
+        "files": [
+            {
+                "name": r.get("name"),
+                "sha256": r.get("sha256"),
+                "findings": len(r.get("findings", []) or []),
+                # did the guardrails actually run on this report?
+                "security_evaluated": isinstance((r.get("security") or {}).get("injection_detected"), bool),
+            }
+            for r in reports
+        ],
+    }
+
+
 @app.post("/runs")
 def save_run(body: RunBody):
-    """Persist one analysis so it can be reloaded later."""
+    """Persist one analysis (with provenance) so it can be reloaded later."""
     rid = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     data = body.model_dump()
     data["_id"], data["_created"] = rid, time.time()
+    data["meta"] = _build_meta(data)
     with open(os.path.join(RUNS_DIR, rid + ".json"), "w", encoding="utf-8") as f:
         json.dump(data, f)
-    return {"id": rid}
+    return {"id": rid, "meta": data["meta"]}
 
 
 @app.get("/runs")
