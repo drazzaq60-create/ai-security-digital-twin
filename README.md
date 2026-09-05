@@ -51,10 +51,15 @@ in layers:
   Base64-encoded, Roman-Urdu, indirect, long-context, marker-splitting, plus benign look-alikes
   that must *not* trigger). `redteam_eval_e2e.py` measures end-to-end attack-success-rate.
 
-**Honest about the limits:** the eval scores are on *my* test set, which is meant to grow — a good
-score there is not proof of general robustness. Detection gives visibility; the hardening (L2) is
-the real protection. The end-to-end eval openly reports that current models already resist simple
-injections, so the numbers don't overstate what the layer proves.
+**Measured (honestly), not claimed:**
+- Detector: **93% recall on core attack classes**, **0% on adaptive evasions** (leetspeak,
+  homoglyphs, paraphrase, non-English — a regex detector can't win that race, and the eval says so),
+  **~8% false-positive rate** (a realistic FP is left in so the number isn't a manufactured zero).
+- End-to-end: a context-confusion attack gave the **naive prompt a 14% attack-success-rate**;
+  with L2 hardening that dropped to **0%** — a measured before/after, on a small set.
+
+The eval sets are fixed and meant to grow, so a good score is not proof of general robustness.
+Full threat model, controls, and residual risk: **[SECURITY.md](SECURITY.md)**.
 
 ---
 
@@ -146,8 +151,8 @@ sample_data/         synthetic reports (incl. adversarial/)
 
 ## Roadmap
 
-- Grow the red-team set (more obfuscated / multilingual injections) and report a naive-vs-hardened delta.
-- A written threat model (`SECURITY.md`).
+- Add normalisation (de-leet / homoglyph folding) + a small semantic classifier to lift detection on the adaptive classes `SECURITY.md` documents as current gaps.
+- Broaden multilingual injection coverage beyond Roman-Urdu.
 - Optional local Nmap live-scan mode (env-gated off in any public deployment), auth, and a database.
 
 ## Security & data notes

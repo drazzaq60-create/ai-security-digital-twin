@@ -37,6 +37,12 @@ _PATTERNS = [
     ("suppress_findings", "High",
      r"(?:do\s+not|don'?t|never)\s+(?:report|list|include|mention|flag)\s+"
      r"(?:any\s+)?(?:findings?|vulnerabilit|issues?|problems?)"),
+    ("suppress_findings_soft", "High",
+     r"(?:no\s+need\s+to|there'?s\s+no\s+need\s+to|(?:please\s+)?(?:omit|skip|leave\s+out))\s+"
+     r"(?:all\s+|any\s+|the\s+)?(?:report(?:ing)?\s+)?(?:findings?|vulnerabilit|issues?|problems?)"),
+    ("instruction_override_soft", "High",
+     r"(?:pay\s+no\s+attention\s+to|take\s+no\s+notice\s+of)\s+(?:all\s+|the\s+|any\s+)?"
+     r"(?:previous|above|prior|earlier|preceding)\s+(?:instructions?|prompts?|rules?|context)"),
     ("force_false_positive", "High",
      r"(?:mark|report|classify|treat)\s+(?:all|everything|every\s+finding|them)\s+as\s+"
      r"(?:a\s+|an\s+|the\s+)?"  # allow an article: "as a false positive"
@@ -92,12 +98,18 @@ def _scan_patterns(text):
 _B64 = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
 
 
+# Zero-width / bidi characters attackers insert to break word-boundary regexes
+# ("ignore​all previous ..."). We strip them before scanning so the split words rejoin.
+_ZERO_WIDTH = re.compile(r"[​‌‍‎‏‪-‮⁠﻿]")
+
+
 def scan_injection(text):
     """Return likely prompt-injection detections in untrusted report text, including
     injection hidden in Base64 (decoded and re-scanned - random hashes decode to garbage,
     so this doesn't false-positive on them)."""
     if not text:
         return []
+    text = _ZERO_WIDTH.sub("", text)  # defeat zero-width-space evasion before matching
     detections = _scan_patterns(text)
 
     for m in _B64.finditer(text):
