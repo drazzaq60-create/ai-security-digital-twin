@@ -1,10 +1,10 @@
 :root {
-  /* Light security-console palette: cool-gray canvas so white panels have contrast */
-  --bg: #d7dfea;
+  /* Light palette: ONE uniform white surface for every panel/card/rail on a gray canvas */
+  --bg: #dbe3ed;
   --panel: #ffffff;
-  --panel-2: #eef2f8;
-  --side: #e7edf5;
-  --border: #c4cfdd;
+  --panel-2: #ffffff;
+  --side: #ffffff;
+  --border: #c7d1de;
   --text: #17233a;
   --muted: #566579;
   --mint: #0891c9;      /* primary accent = security cyan-blue (darker for light bg) */
