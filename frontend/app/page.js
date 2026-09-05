@@ -755,8 +755,7 @@ export default function Home() {
 
         {/* Provenance — makes a saved/restored analysis self-describing and auditable. */}
         {nav === "overview" && runMeta && (
-          <div className="panel">
-            <div className="panel-head">🧾 Run Provenance</div>
+          <Section title="🧾 Run Provenance">
             <div className="prov">
               <div><span className="pk">Analyzed</span> {runMeta.created ? new Date(runMeta.created * 1000).toLocaleString() : "—"}</div>
               <div><span className="pk">Model</span> {runMeta.model}</div>
@@ -784,13 +783,12 @@ export default function Home() {
                 </div>
               )}
             </div>
-          </div>
+          </Section>
         )}
 
         {/* Guardrails — LLM security. Shows prompt-injection scan results per report. */}
         {nav === "overview" && reports.length > 0 && (
-          <div className="panel">
-            <div className="panel-head">🛡️ Guardrails — LLM Security</div>
+          <Section title="🛡️ Guardrails — LLM Security">
             <div className="gr-body">
               <div className="gr-summary">
                 {passedReports.length > 0 && <span className="grs ok">✓ {passedReports.length} passed</span>}
@@ -835,13 +833,12 @@ export default function Home() {
                 <div className="gr-note">No reports were security-evaluated in this run.</div>
               )}
             </div>
-          </div>
+          </Section>
         )}
 
         {/* Prioritized fixes, grouped by report name; correlated fixes last */}
         {nav === "overview" && okReports.length > 0 && (
-          <div className="panel">
-            <div className="panel-head">🎯 Prioritized Fixes</div>
+          <Section title="🎯 Prioritized Fixes">
             <div className="fixes">
               {okReports.map((r, i) => (
                 <div key={i} className="fix-report">
@@ -863,7 +860,7 @@ export default function Home() {
                 </div>
               )}
             </div>
-          </div>
+          </Section>
         )}
 
         {/* Cross-tool correlation — only shown once a real correlate result (or failure) exists */}
@@ -1142,6 +1139,19 @@ function Bars({ rows, colorFor }) {
           <span className="bar-val">{r.value}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+function Section({ title, children, defaultOpen = true }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="panel">
+      <div className="panel-head hist-head">
+        <span>{title}</span>
+        <button className="mini-btn" onClick={() => setOpen((o) => !o)} title={open ? "Minimize" : "Expand"}>{open ? "–" : "+"}</button>
+      </div>
+      {open && children}
     </div>
   );
 }

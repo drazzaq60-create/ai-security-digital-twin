@@ -114,6 +114,9 @@ html, body { margin: 0; padding: 0; color: var(--text);
 .exec-summary { white-space: pre-wrap; padding: 16px 18px; font-size: 14px; line-height: 1.7; color: var(--text);
   border-left: 3px solid var(--mint); font-family: "Plus Jakarta Sans", system-ui, sans-serif; }
 .hist-head { display: flex; align-items: center; justify-content: space-between; }
+.mini-btn { background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); width: 26px; height: 26px;
+  border-radius: 7px; font-size: 17px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.mini-btn:hover { border-color: var(--mint); color: var(--mint-2); }
 .run-list.wide { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; padding: 14px; }
 
 @media (max-width: 820px) {
