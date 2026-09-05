@@ -15,6 +15,7 @@
 # they fire on directives aimed AT the analyzer, not on the attack strings a real VA report
 # naturally contains. Effectiveness is measured by redteam_eval.py.
 
+import base64
 import re
 
 # System-prompt preamble prepended to every task that consumes untrusted report content.
@@ -53,6 +54,13 @@ _PATTERNS = [
      r"(?:<\|[^|]{0,40}\|>|\[/?INST\]|#{2,}\s*system|BEGIN\s+SYSTEM|<system>)"),
     ("jailbreak", "Medium",
      r"\b(?:jailbreak|DAN\s+mode|developer\s+mode|do\s+anything\s+now)\b"),
+    # Roman-Urdu variants (a real gap for Pakistan-facing tools; part of the red-team niche).
+    ("roman_urdu_override", "High",
+     r"\b(?:ignore|nazar[\s-]?andaz)\s+kar(?:o|en|na|do)\b"),
+    ("roman_urdu_suppress", "High",
+     r"\breport\s+mat\s+kar(?:o|en|na|na)\b|\bkuch\s+(?:bhi\s+)?report\s+na\b"),
+    ("roman_urdu_safe", "Medium",
+     r"\bsab\s+(?:kuch\s+)?safe\b|\bsystem\s+safe\s+hai\b|\bkoi\s+(?:vulnerab\w*|masla|issue)\s+nah[ie]"),
     ("as_an_ai", "Low",
      r"as\s+an?\s+(?:ai|language\s+model|assistant)\b"),
 ]
@@ -66,11 +74,9 @@ def _snippet(text, start, end, pad=45):
     return ("…" if a > 0 else "") + s + ("…" if b < len(text) else "")
 
 
-def scan_injection(text):
-    """Return a list of likely prompt-injection detections in untrusted report text."""
-    if not text:
-        return []
-    detections, seen = [], set()
+def _scan_patterns(text):
+    """Run the regex patterns over one string and return detections."""
+    out, seen = [], set()
     for technique, severity, rx in _COMPILED:
         for m in rx.finditer(text):
             snip = _snippet(text, m.start(), m.end())
@@ -78,11 +84,37 @@ def scan_injection(text):
             if dedup in seen:
                 continue
             seen.add(dedup)
-            detections.append({"technique": technique, "severity": severity,
-                               "match": m.group(0).strip(), "snippet": snip})
-            if len(detections) >= 25:
-                return detections
-    return detections
+            out.append({"technique": technique, "severity": severity,
+                        "match": m.group(0).strip(), "snippet": snip})
+    return out
+
+
+_B64 = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
+
+
+def scan_injection(text):
+    """Return likely prompt-injection detections in untrusted report text, including
+    injection hidden in Base64 (decoded and re-scanned - random hashes decode to garbage,
+    so this doesn't false-positive on them)."""
+    if not text:
+        return []
+    detections = _scan_patterns(text)
+
+    for m in _B64.finditer(text):
+        blob = m.group(0)
+        try:
+            decoded = base64.b64decode(blob + "=" * (-len(blob) % 4)).decode("utf-8", "ignore")
+        except Exception:
+            continue
+        if len(decoded) < 6:
+            continue
+        if _scan_patterns(decoded):  # the decoded text itself contains an injection
+            detections.append({"technique": "encoded_injection", "severity": "High",
+                               "match": blob[:24] + "…",
+                               "snippet": f"Base64 decodes to: {decoded[:90]}"})
+            break
+
+    return detections[:25]
 
 
 def harden_prompt(untrusted_text, label="REPORT"):

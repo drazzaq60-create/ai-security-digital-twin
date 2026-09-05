@@ -35,7 +35,7 @@ flowchart LR
 - **L1 Detect** — heuristic scanner flags injection *aimed at the analyzer*, tuned not to false-alarm on the attack words real VA reports naturally contain.
 - **L2 Harden** — an injection-defense preamble + delimiter-wrapping so the model treats report text as data. *Verified: a report ordering the model to report nothing was ignored — both real findings were still extracted.*
 - **L3 Check output** — flags a response that leaked the system prompt or looks hijacked.
-- **L4 Evaluate** — `redteam_eval.py` scores the detector (**100% recall / 0% false-positives** on the current set); `redteam_eval_e2e.py` measures end-to-end **attack success rate**.
+- **L4 Evaluate** — `redteam_eval.py` scores the detector across 8 attack classes — direct, Base64-encoded, Roman-Urdu, indirect (in evidence fields), long-context, role/marker splitting, probes (**100% recall / 0% false-positives** on the set, incl. a benign Base64 hash that must not flag); `redteam_eval_e2e.py` measures end-to-end **attack success rate**.
 
 > Honest by design: 100% is on *this* red-team set, which is meant to grow. Detection gives visibility; **hardening is the real protection**; and the E2E eval openly reports that modern models already resist simple injections — so the claims never outrun the evidence.
 
