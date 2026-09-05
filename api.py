@@ -31,6 +31,7 @@ from correlate import correlate
 import cache
 import guardrails
 from web_graph import build_web_graph, simulate_cut
+from live_scan import run_web_scan
 from report_export import build_pdf
 from llm import call_llm, FAST_MODELS, GEMINI_MODELS
 
@@ -104,6 +105,43 @@ async def extract(file: UploadFile = File(...)):
 
     return {"name": file.filename, "findings": findings, "sha256": sha256,
             "error": None, "security": security, "parser": parser}
+
+
+class ScanBody(BaseModel):
+    target: str = ""
+    ports: bool = True
+
+
+@app.post("/scan")
+async def scan(body: ScanBody):
+    """Automatic scan: run a light, non-intrusive live assessment of ONE authorized web
+    target (TLS + security headers + common-port reachability) and return a report-shaped
+    result whose findings flow into the same pipeline as uploaded reports.
+
+    The caller is responsible for target authorization (enforced in the UI)."""
+    target = (body.target or "").strip()
+    if not target:
+        return {"name": "", "host": "", "findings": [], "sha256": None,
+                "parser": "live:web", "security": None, "scan": None,
+                "error": "No target provided."}
+    try:
+        result = await run_in_threadpool(run_web_scan, target, body.ports)
+    except ValueError as e:
+        return {"name": target, "host": "", "findings": [], "sha256": None,
+                "parser": "live:web", "security": None, "scan": None,
+                "error": f"Invalid target: {e}"}
+    except Exception as e:
+        return {"name": target, "host": "", "findings": [], "sha256": None,
+                "parser": "live:web", "security": None, "scan": None,
+                "error": f"Scan failed: {e}"}
+
+    # Provenance: hash the normalized target + a coarse timestamp so runs are identifiable.
+    stamp = f"{result['host']}@{int(time.time())}"
+    return {
+        "name": result["name"], "host": result["host"], "findings": result["findings"],
+        "sha256": hashlib.sha256(stamp.encode()).hexdigest(),
+        "parser": "live:web", "security": None, "scan": result["scan"], "error": None,
+    }
 
 
 class ReportBody(BaseModel):

@@ -218,7 +218,10 @@ export default function Home() {
   const [backendUp, setBackendUp] = useState(null);  // null=unknown, true/false
   const [nav, setNav] = useState("scan");
   const [railOpen, setRailOpen] = useState(true);
-  const [scanMode, setScanMode] = useState("manual");  // manual (report upload) | auto (live scan, future)
+  const [scanMode, setScanMode] = useState("manual");  // manual (report upload) | auto (live scan)
+  const [scanTarget, setScanTarget] = useState("");
+  const [scanPorts, setScanPorts] = useState(true);
+  const [scanAuthorized, setScanAuthorized] = useState(false);
   const [cmpA, setCmpA] = useState("");
   const [cmpB, setCmpB] = useState("");
   const [cmpResult, setCmpResult] = useState(null);
@@ -288,6 +291,131 @@ export default function Home() {
   function removeFile(name) { setFiles((prev) => prev.filter((f) => f.name !== name)); }
   function logLine(text, kind = "info") {
     setLog((prev) => [...prev, { text, kind, t: new Date().toLocaleTimeString() }]);
+  }
+
+  // Shared downstream: correlation (2+ reports) -> attack graph -> auto-save -> Overview.
+  // Reused by analyze() (uploads) and runScan() (live scan) so both paths behave identically.
+  async function finishPipeline(collected, signal) {
+    const allFindings = collected.flatMap((r) => r.findings || []);
+    let corrOut = null, graphOut = null;
+
+    const withFindings = collected.filter((r) => (r.findings || []).length > 0).length;
+    if (withFindings >= 2) {
+      logLine("Correlating across all reports…");
+      try {
+        const cRes = await fetchStage(`${API_URL}/correlate`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ findings: allFindings }),
+        }, signal);
+        if (!cRes.ok) throw new Error(`correlate failed (${cRes.status})`);
+        const cData = await cRes.json();
+        corrOut = cData.correlation || {};
+        setCorrelation(corrOut);
+        logLine(cData.correlation?.related
+          ? "✓ Reports are related — correlation complete"
+          : "✓ Reports are unrelated — analyzed separately", "ok");
+      } catch (e) {
+        setCorrelationError(errMsg(e));
+        logLine(`✗ Correlation ${errMsg(e)} — not a conclusion, the request errored`, "err");
+      }
+    } else {
+      logLine("Correlation skipped — needs 2+ reports with findings", "info");
+    }
+
+    if (allFindings.length > 0) {
+      logLine("Building attack-surface graph…");
+      try {
+        const gRes = await fetchStage(`${API_URL}/graph`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ findings: allFindings, topology }),
+        }, signal);
+        if (!gRes.ok) throw new Error(`graph failed (${gRes.status})`);
+        const gData = await gRes.json();
+        graphOut = gData;
+        setGraph(gData);
+        logLine(
+          `✓ Attack surface: ${Math.max((gData.nodes?.length || 1) - 1, 0)} host(s), ` +
+          `${gData.paths?.length || 0} attack path(s) to ${gData.reachable_critical?.length || 0} critical asset(s)`,
+          "ok");
+      } catch (e) {
+        setGraphError(errMsg(e));
+        logLine(`✗ Attack-surface graph failed: ${errMsg(e)}`, "err");
+      }
+    }
+
+    const failed = collected.filter((r) => r.status === "failed").length;
+    logLine(failed > 0 ? `Analysis finished with ${failed} failed report(s)` : "Analysis finished",
+      failed > 0 ? "err" : "done");
+
+    try {
+      const sRes = await fetch(`${API_URL}/runs`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reports: collected, correlation: corrOut, graph: graphOut }),
+      });
+      if (sRes.ok) { const sd = await sRes.json(); setRunMeta(sd.meta || null); }
+      loadRuns();
+    } catch { /* best-effort */ }
+    setNav("overview");
+  }
+
+  // Automatic scan: hit /scan for one authorized target, then run the shared pipeline.
+  async function runScan() {
+    const target = scanTarget.trim();
+    if (!target) { setError("Enter a target (hostname or URL)."); return; }
+    if (!scanAuthorized) { setError("Confirm you're authorized to scan this target."); return; }
+    setError(""); setRunning(true); setLog([]); setReports([]);
+    setCorrelation(null); setCorrelationError("");
+    setGraph(null); setGraphError(""); setSim(null); setSimCut(null); setRunMeta(null); setExecSummary("");
+
+    const ac = new AbortController();
+    abortRef.current = ac;
+    const startedAt = Date.now();
+    setElapsed(0);
+    clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => setElapsed(Math.round((Date.now() - startedAt) / 1000)), 1000);
+
+    try {
+      logLine(`Scanning ${target} — TLS, security headers${scanPorts ? ", common ports" : ""}…`, "start");
+      const res = await fetchStage(`${API_URL}/scan`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target, ports: scanPorts }),
+      }, ac.signal);
+      if (!res.ok) throw new Error(`scan failed (${res.status})`);
+      const data = await res.json();
+      if (data.error) { setError(data.error); logLine(`✗ ${data.error}`, "err"); return; }
+
+      const rep = {
+        name: data.name, findings: data.findings || [], fixes: [], false_positives: [],
+        status: (data.findings || []).length ? "ok" : "empty", error: "", fixesFailed: false,
+        security: null, parser: data.parser, sha256: data.sha256, scan: data.scan,
+      };
+      logLine(`✓ ${rep.name}: ${rep.findings.length} finding(s) in ${data.scan?.duration_s ?? "?"}s`, "ok");
+      setReports([rep]);
+
+      // Prioritized fixes for the scan's findings (same LLM step uploads get).
+      if (rep.findings.length > 0) {
+        logLine("Analyzing findings (fixes + false positives)… waiting for model");
+        try {
+          const rRes = await fetchStage(`${API_URL}/report-fixes`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: rep.name, findings: rep.findings, focus: message }),
+          }, ac.signal);
+          if (rRes.ok) { const rData = await rRes.json(); rep.fixes = rData.fixes || []; rep.false_positives = rData.false_positives || []; }
+        } catch (e) { rep.fixesFailed = true; logLine(`✗ fixes step failed (${errMsg(e)})`, "err"); }
+        setReports([rep]);
+      }
+
+      if (ac.signal.aborted) { logLine("Scan cancelled.", "err"); return; }
+      await finishPipeline([rep], ac.signal);
+    } catch (e) {
+      const m = errMsg(e);
+      if (m !== "cancelled") setError(`${m} — is the backend running on :8000?`);
+      logLine(`✗ ${m}`, "err");
+    } finally {
+      clearInterval(timerRef.current);
+      abortRef.current = null;
+      setRunning(false);
+    }
   }
 
   // One report's full pipeline (extract -> fixes). Reused by analyze() and retryReport().
@@ -385,78 +513,7 @@ export default function Home() {
         return;
       }
 
-      let corrOut = null, graphOut = null;  // captured for auto-save
-
-      // Correlation is only meaningful across 2+ reports that actually have findings.
-      const withFindings = collected.filter((r) => r.findings.length > 0).length;
-      if (withFindings >= 2) {
-        logLine("Correlating across all reports…");
-        try {
-          const cRes = await fetchStage(`${API_URL}/correlate`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ findings: allFindings }),
-          }, ac.signal);
-          if (!cRes.ok) throw new Error(`correlate failed (${cRes.status})`);
-          const cData = await cRes.json();
-          corrOut = cData.correlation || {};
-          setCorrelation(corrOut);
-          logLine(
-            cData.correlation?.related
-              ? "✓ Reports are related — correlation complete"
-              : "✓ Reports are unrelated — analyzed separately",
-            "ok"
-          );
-        } catch (e) {
-          // A failed correlation is NOT evidence that reports are unrelated. Say it failed.
-          setCorrelationError(errMsg(e));
-          logLine(`✗ Correlation ${errMsg(e)} — not a conclusion, the request errored`, "err");
-        }
-      } else {
-        logLine("Correlation skipped — needs 2+ reports with findings", "info");
-      }
-
-      // Build the attack-surface graph from every finding gathered (deterministic backend).
-      if (allFindings.length > 0) {
-        logLine("Building attack-surface graph…");
-        try {
-          const gRes = await fetchStage(`${API_URL}/graph`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ findings: allFindings, topology }),
-          }, ac.signal);
-          if (!gRes.ok) throw new Error(`graph failed (${gRes.status})`);
-          const gData = await gRes.json();
-          graphOut = gData;
-          setGraph(gData);
-          logLine(
-            `✓ Attack surface: ${Math.max((gData.nodes?.length || 1) - 1, 0)} host(s), ` +
-            `${gData.paths?.length || 0} attack path(s) to ${gData.reachable_critical?.length || 0} critical asset(s)`,
-            "ok"
-          );
-        } catch (e) {
-          setGraphError(errMsg(e));
-          logLine(`✗ Attack-surface graph failed: ${errMsg(e)}`, "err");
-        }
-      }
-
-      const failed = collected.filter((r) => r.status === "failed").length;
-      logLine(
-        failed > 0 ? `Analysis finished with ${failed} failed report(s)` : "Analysis finished",
-        failed > 0 ? "err" : "done"
-      );
-
-      // Auto-save this analysis (with provenance) so it can be reloaded from History later.
-      try {
-        const sRes = await fetch(`${API_URL}/runs`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reports: collected, correlation: corrOut, graph: graphOut }),
-        });
-        if (sRes.ok) { const sd = await sRes.json(); setRunMeta(sd.meta || null); }
-        loadRuns();
-      } catch { /* best-effort */ }
-      setNav("overview");  // jump to results once the scan completes
+      await finishPipeline(collected, ac.signal);
     } catch (e) {
       const m = errMsg(e);
       if (m !== "cancelled") setError(`${m} — is the backend running on :8000?`);
@@ -730,9 +787,58 @@ export default function Home() {
       </div>
         </div>
         ) : (
-        <div className="panel">
-          <div className="panel-head">📡 Automatic — live scan (coming soon)</div>
-          <p className="pad muted">Run real scanners directly from Sentinel — Nmap, OWASP ZAP, Nessus/OpenVAS, Wazuh — against <b>authorized</b> targets, then feed results into the same pipeline (findings → correlation → attack paths → guardrails). Planned. For now, run scanners externally and upload the reports under <b>Manual</b>.</p>
+        <div className="scan-grid">
+        <aside className="sidebar">
+          <div className="side-label">Target</div>
+          <input
+            className="scan-input"
+            placeholder="example.com  or  https://host:8443"
+            value={scanTarget}
+            onChange={(e) => setScanTarget(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !running) runScan(); }}
+          />
+
+          <label className="scan-check">
+            <input type="checkbox" checked={scanPorts} onChange={(e) => setScanPorts(e.target.checked)} />
+            <span>Probe common ports (FTP, SSH, RDP, DB, …)</span>
+          </label>
+
+          <label className="scan-check auth">
+            <input type="checkbox" checked={scanAuthorized} onChange={(e) => setScanAuthorized(e.target.checked)} />
+            <span>I'm <b>authorized</b> to scan this target.</span>
+          </label>
+
+          <div className="side-label">Focus (optional)</div>
+          <textarea className="focus" rows={3}
+            placeholder="e.g. what are the critical findings?"
+            value={message} onChange={(e) => setMessage(e.target.value)} />
+
+          {!running ? (
+            <button className="run" onClick={runScan} disabled={!scanAuthorized}>▶ Run Scan</button>
+          ) : (
+            <div className="run-row">
+              <button className="run" disabled>Scanning… ⏱ {elapsed}s</button>
+              <button className="cancel" onClick={cancelAnalysis}>✕ Cancel</button>
+            </div>
+          )}
+          {error && <div className="err-box">{error}</div>}
+
+          <div className="topo-note" style={{ marginTop: 14 }}>
+            Light, non-intrusive check — TLS/cert, HTTP security headers, and common-port
+            reachability. No exploitation or fuzzing. Results flow into the same pipeline as
+            uploads. For deep scans (Nmap/Nessus/ZAP), run them externally and add the reports
+            under <b>Manual</b>.
+          </div>
+        </aside>
+        <div className="panel logpanel">
+          <div className="panel-head">● Live Activity</div>
+          <div className="console">
+            {log.length === 0 && <div className="muted">Enter an authorized target on the left, then Run Scan — results open in Overview.</div>}
+            {log.map((l, i) => (
+              <div key={i} className={`ln ${l.kind}`}><span className="ts">{l.t}</span> {l.text}</div>
+            ))}
+          </div>
+        </div>
         </div>
         )}
       </div>
