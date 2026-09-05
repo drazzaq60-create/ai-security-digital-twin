@@ -20,11 +20,12 @@ const RAIL = [
   { id: "overview", label: "Overview" },
   { id: "paths", label: "Attack Paths" },
   { id: "findings", label: "Findings" },
+  { id: "compare", label: "Compare" },
   { id: "history", label: "History" },
 ];
 const VIEW_TITLES = {
   scan: "New Scan", overview: "Overview", paths: "Attack Paths",
-  findings: "Findings & Correlation", history: "Saved Analyses",
+  findings: "Findings & Correlation", compare: "Compare Analyses", history: "Saved Analyses",
 };
 
 function RailIcon({ name }) {
@@ -34,6 +35,7 @@ function RailIcon({ name }) {
     overview: <><rect x="3" y="3" width="7" height="7" rx="1.5" {...p} /><rect x="12" y="3" width="7" height="7" rx="1.5" {...p} /><rect x="3" y="12" width="7" height="7" rx="1.5" {...p} /><rect x="12" y="12" width="7" height="7" rx="1.5" {...p} /></>,
     paths: <><circle cx="4" cy="11" r="2.2" {...p} /><circle cx="18" cy="5" r="2.2" {...p} /><circle cx="18" cy="17" r="2.2" {...p} /><path d="M6 10 16 6M6 12l10 4" {...p} /></>,
     findings: <><path d="M4 6h14M4 11h14M4 16h9" {...p} /><circle cx="18" cy="17" r="0.6" {...p} /></>,
+    compare: <><rect x="3" y="4" width="7" height="14" rx="1.5" {...p} /><rect x="12" y="4" width="7" height="14" rx="1.5" {...p} /></>,
     history: <><circle cx="11" cy="11" r="7.5" {...p} /><path d="M11 6.5V11l3 2" {...p} /></>,
   };
   return <svg viewBox="0 0 22 22" width="18" height="18" aria-hidden="true">{paths[name]}</svg>;
@@ -170,6 +172,26 @@ export default function Home() {
 
   const [backendUp, setBackendUp] = useState(null);  // null=unknown, true/false
   const [nav, setNav] = useState("scan");
+  const [cmpA, setCmpA] = useState("");
+  const [cmpB, setCmpB] = useState("");
+  const [cmpResult, setCmpResult] = useState(null);
+
+  async function runCompare(a, b) {
+    if (!a || !b || a === b) { setCmpResult(null); return; }
+    try {
+      const [ra, rb] = await Promise.all([
+        fetch(`${API_URL}/runs/${a}`).then((r) => r.json()),
+        fetch(`${API_URL}/runs/${b}`).then((r) => r.json()),
+      ]);
+      const key = (f) => `${(f.name || "").toLowerCase()}@@${(f.host || "").toLowerCase()}`;
+      const mapA = new Map(); (ra.reports || []).flatMap((r) => r.findings || []).forEach((f) => mapA.set(key(f), f));
+      const mapB = new Map(); (rb.reports || []).flatMap((r) => r.findings || []).forEach((f) => mapB.set(key(f), f));
+      const fixed = [...mapA.values()].filter((f) => !mapB.has(key(f)));   // present before, gone after
+      const added = [...mapB.values()].filter((f) => !mapA.has(key(f)));   // new in the later run
+      const common = [...mapB.values()].filter((f) => mapA.has(key(f)));
+      setCmpResult({ fixed, added, common });
+    } catch { setCmpResult({ error: "Could not load those analyses to compare." }); }
+  }
 
   async function loadRuns() {
     try {
@@ -633,6 +655,8 @@ export default function Home() {
         </div>
       )}
 
+      {nav === "overview" && okReports.length > 0 && <OverviewCharts reports={okReports} graph={graph} />}
+
         {/* Provenance — makes a saved/restored analysis self-describing and auditable. */}
         {nav === "overview" && runMeta && (
           <div className="panel">
@@ -862,6 +886,57 @@ export default function Home() {
           <div className="empty">No findings yet. <button className="linklike" onClick={() => setNav("scan")}>Start a scan →</button></div>
         )}
 
+        {nav === "compare" && (
+          runs.length < 2 ? (
+            <div className="empty">Need at least two saved analyses to compare — run a few scans, then come back.</div>
+          ) : (
+            <div className="panel">
+              <div className="panel-head">🔀 Compare two analyses (what changed over time)</div>
+              <div className="cmp-pick">
+                <div className="cmp-sel">
+                  <label>Baseline (before)</label>
+                  <select value={cmpA} onChange={(e) => { setCmpA(e.target.value); runCompare(e.target.value, cmpB); }}>
+                    <option value="">Select…</option>
+                    {runs.map((r) => <option key={r.id} value={r.id}>{(r.label || (r.names || []).join(", ") || r.id).slice(0, 40)} · {r.findings}f</option>)}
+                  </select>
+                </div>
+                <span className="cmp-arrow">→</span>
+                <div className="cmp-sel">
+                  <label>Compare to (after)</label>
+                  <select value={cmpB} onChange={(e) => { setCmpB(e.target.value); runCompare(cmpA, e.target.value); }}>
+                    <option value="">Select…</option>
+                    {runs.map((r) => <option key={r.id} value={r.id}>{(r.label || (r.names || []).join(", ") || r.id).slice(0, 40)} · {r.findings}f</option>)}
+                  </select>
+                </div>
+              </div>
+              {cmpResult?.error && <div className="fail-box" style={{ margin: "0 16px 16px" }}>{cmpResult.error}</div>}
+              {cmpResult && !cmpResult.error && (
+                <div className="cmp-body">
+                  <div className="cmp-summary">
+                    <span className="grs bad">＋ {cmpResult.added.length} new</span>
+                    <span className="grs ok">✓ {cmpResult.fixed.length} fixed</span>
+                    <span className="grs na">= {cmpResult.common.length} unchanged</span>
+                  </div>
+                  <div className="cmp-cols">
+                    <div className="cmp-col">
+                      <h4>＋ New findings</h4>
+                      {cmpResult.added.length === 0 ? <p className="muted">None</p> : cmpResult.added.map((f, i) => (
+                        <div key={i} className="cmp-item"><span className={`sev sev-${(f.severity || "unknown").toLowerCase()}`}>{f.severity || "?"}</span> {f.name} <span className="fhost">{f.host}</span></div>
+                      ))}
+                    </div>
+                    <div className="cmp-col">
+                      <h4>✓ Fixed / resolved</h4>
+                      {cmpResult.fixed.length === 0 ? <p className="muted">None</p> : cmpResult.fixed.map((f, i) => (
+                        <div key={i} className="cmp-item"><span className={`sev sev-${(f.severity || "unknown").toLowerCase()}`}>{f.severity || "?"}</span> {f.name} <span className="fhost">{f.host}</span></div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        )}
+
         {nav === "history" && (
           runs.length === 0 ? (
             <div className="empty">No saved analyses yet — every scan you run is saved here.</div>
@@ -896,6 +971,56 @@ export default function Home() {
         )}
         </div>
       </main>
+    </div>
+  );
+}
+
+const SEV_ORDER = ["Critical", "High", "Medium", "Low", "Info", "Unknown"];
+const SEV_COLOR = { Critical: "#ef4444", High: "#f87171", Medium: "#eab308", Low: "#3b82f6", Info: "#38bdf8", Unknown: "#8592a3" };
+
+function Bars({ rows, colorFor }) {
+  const max = Math.max(1, ...rows.map((r) => r.value));
+  return (
+    <div className="bars">
+      {rows.map((r, i) => (
+        <div key={i} className="bar-row">
+          <span className="bar-label" title={r.label}>{r.label}</span>
+          <div className="bar-track"><div className="bar-fill" style={{ width: (r.value / max) * 100 + "%", background: colorFor(r) }} /></div>
+          <span className="bar-val">{r.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function OverviewCharts({ reports, graph }) {
+  const findings = reports.flatMap((r) => r.findings || []);
+  const sev = Object.fromEntries(SEV_ORDER.map((s) => [s, 0]));
+  findings.forEach((f) => { const s = SEV_ORDER.includes(f.severity) ? f.severity : "Unknown"; sev[s]++; });
+  const sevRows = SEV_ORDER.filter((s) => sev[s] > 0).map((s) => ({ label: s, value: sev[s] }));
+  const repRows = reports.map((r) => ({ label: r.name, value: (r.findings || []).length }));
+  const paths = graph?.paths || [];
+  const topPri = paths.length ? paths[0].priority : 0;
+
+  return (
+    <div className="panel">
+      <div className="panel-head">📊 Dashboard</div>
+      <div className="dash">
+        <div className="dash-card">
+          <div className="dash-title">Findings by severity</div>
+          {sevRows.length ? <Bars rows={sevRows} colorFor={(r) => SEV_COLOR[r.label]} /> : <p className="muted">No findings.</p>}
+        </div>
+        <div className="dash-card">
+          <div className="dash-title">Findings by report</div>
+          <Bars rows={repRows} colorFor={() => "var(--mint)"} />
+        </div>
+        <div className="dash-card metrics">
+          <div className="dash-title">Attack surface</div>
+          <div className="metric"><span>{paths.length}</span> attack path(s)</div>
+          <div className="metric"><span>{(graph?.reachable_critical || []).length}</span> reachable critical asset(s)</div>
+          <div className="metric"><span>{topPri}</span> top path priority</div>
+        </div>
+      </div>
     </div>
   );
 }
