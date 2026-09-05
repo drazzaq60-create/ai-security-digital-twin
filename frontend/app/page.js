@@ -20,12 +20,15 @@ const RAIL = [
   { id: "overview", label: "Overview" },
   { id: "paths", label: "Attack Paths" },
   { id: "findings", label: "Findings" },
+  { id: "mitre", label: "ATT&CK" },
+  { id: "summary", label: "Summary" },
   { id: "compare", label: "Compare" },
   { id: "history", label: "History" },
 ];
 const VIEW_TITLES = {
   scan: "New Scan", overview: "Overview", paths: "Attack Paths",
-  findings: "Findings & Correlation", compare: "Compare Analyses", history: "Saved Analyses",
+  findings: "Findings & Correlation", mitre: "MITRE ATT&CK Mapping",
+  summary: "Executive Summary", compare: "Compare Analyses", history: "Saved Analyses",
 };
 
 function RailIcon({ name }) {
@@ -36,9 +39,51 @@ function RailIcon({ name }) {
     paths: <><circle cx="4" cy="11" r="2.2" {...p} /><circle cx="18" cy="5" r="2.2" {...p} /><circle cx="18" cy="17" r="2.2" {...p} /><path d="M6 10 16 6M6 12l10 4" {...p} /></>,
     findings: <><path d="M4 6h14M4 11h14M4 16h9" {...p} /><circle cx="18" cy="17" r="0.6" {...p} /></>,
     compare: <><rect x="3" y="4" width="7" height="14" rx="1.5" {...p} /><rect x="12" y="4" width="7" height="14" rx="1.5" {...p} /></>,
+    mitre: <><circle cx="11" cy="11" r="5" {...p} /><path d="M11 1.5v3M11 17.5v3M1.5 11h3M17.5 11h3" {...p} /></>,
+    summary: <><path d="M5 3h9l4 4v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" {...p} /><path d="M7.5 11h7M7.5 14.5h7M7.5 7.5h3" {...p} /></>,
     history: <><circle cx="11" cy="11" r="7.5" {...p} /><path d="M11 6.5V11l3 2" {...p} /></>,
   };
   return <svg viewBox="0 0 22 22" width="18" height="18" aria-hidden="true">{paths[name]}</svg>;
+}
+
+// Deterministic finding -> MITRE ATT&CK technique mapping (keyword/type rules; no LLM).
+const MITRE_RULES = [
+  { kw: ["sql injection", "sqli"], id: "T1190", name: "Exploit Public-Facing Application", tactic: "Initial Access" },
+  { kw: ["path traversal", "directory traversal", "lfi", "file inclusion"], id: "T1190", name: "Exploit Public-Facing Application", tactic: "Initial Access" },
+  { kw: ["rce", "remote code execution", "code execution", "deserial", "ghostcat", "ajp"], id: "T1190", name: "Exploit Public-Facing Application", tactic: "Initial Access" },
+  { kw: ["cross-site scripting", "cross site scripting", "xss"], id: "T1059", name: "Command and Scripting Interpreter", tactic: "Execution" },
+  { kw: ["default credential", "default password", "weak password", "weak credential", "valid account"], id: "T1078", name: "Valid Accounts", tactic: "Initial Access" },
+  { kw: ["privilege escalation", "privesc", "priv esc"], id: "T1068", name: "Exploitation for Privilege Escalation", tactic: "Privilege Escalation" },
+  { kw: ["idor", "broken access control", "authorization", "authorisation", "access control"], id: "T1190", name: "Exploit Public-Facing Application", tactic: "Initial Access" },
+  { kw: ["brute force", "authentication failure", "multiple authentication", "password spray"], id: "T1110", name: "Brute Force", tactic: "Credential Access" },
+  { kw: ["ssh"], id: "T1021", name: "Remote Services", tactic: "Lateral Movement" },
+  { kw: ["tls", "ssl", "cipher", "certificate", "rc4"], id: "T1040", name: "Network Sniffing", tactic: "Collection" },
+  { kw: ["csrf", "anti-csrf"], id: "T1190", name: "Exploit Public-Facing Application", tactic: "Initial Access" },
+  { kw: ["banner", "version disclosure", "username enum", "enumeration"], id: "T1046", name: "Network Service Discovery", tactic: "Discovery" },
+  { kw: ["outdated", "cve-", "vulnerable"], id: "T1190", name: "Exploit Public-Facing Application", tactic: "Initial Access" },
+];
+const TACTIC_ORDER = ["Initial Access", "Execution", "Persistence", "Privilege Escalation",
+  "Defense Evasion", "Credential Access", "Discovery", "Lateral Movement", "Collection",
+  "Exfiltration", "Impact", "Unmapped"];
+
+function mapFinding(f) {
+  const type = (f.type || "").toLowerCase();
+  const text = ((f.name || "") + " " + (f.evidence || "")).toLowerCase();
+  if (type === "service") return { id: "T1133", name: "External Remote Services", tactic: "Initial Access" };
+  for (const rule of MITRE_RULES) if (rule.kw.some((k) => text.includes(k))) return rule;
+  if (type === "alert") return { id: "T1046", name: "Network Service Discovery", tactic: "Discovery" };
+  return { id: "—", name: "Unmapped", tactic: "Unmapped" };
+}
+
+function mitreMap(findings) {
+  const tactics = {};
+  findings.forEach((f) => {
+    const m = mapFinding(f);
+    const tac = (tactics[m.tactic] = tactics[m.tactic] || {});
+    const tech = (tac[m.id] = tac[m.id] || { id: m.id, name: m.name, items: [] });
+    tech.items.push(f);
+  });
+  return tactics;
 }
 
 export default function Home() {
@@ -175,6 +220,26 @@ export default function Home() {
   const [cmpA, setCmpA] = useState("");
   const [cmpB, setCmpB] = useState("");
   const [cmpResult, setCmpResult] = useState(null);
+  const [execSummary, setExecSummary] = useState("");
+  const [execLoading, setExecLoading] = useState(false);
+
+  async function generateSummary() {
+    if (reports.length === 0) return;
+    setExecLoading(true);
+    try {
+      const r = await fetch(`${API_URL}/exec-summary`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reports, correlation, graph }),
+      });
+      if (!r.ok) throw new Error(`summary failed (${r.status})`);
+      const d = await r.json();
+      setExecSummary(d.summary || "");
+    } catch (e) {
+      setExecSummary(`Could not generate summary: ${(e && e.message) || "error"}`);
+    } finally {
+      setExecLoading(false);
+    }
+  }
 
   async function runCompare(a, b) {
     if (!a || !b || a === b) { setCmpResult(null); return; }
@@ -288,7 +353,7 @@ export default function Home() {
     if (files.length === 0) { setError("Add at least one report file."); return; }
     setError(""); setRunning(true); setLog([]); setReports([]);
     setCorrelation(null); setCorrelationError("");
-    setGraph(null); setGraphError(""); setSim(null); setSimCut(null); setRunMeta(null);
+    setGraph(null); setGraphError(""); setSim(null); setSimCut(null); setRunMeta(null); setExecSummary("");
     const collected = [];
     let allFindings = [];
 
@@ -445,7 +510,7 @@ export default function Home() {
       const res = await fetch(`${API_URL}/export-report`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reports, correlation, graph }),
+        body: JSON.stringify({ reports, correlation, graph, exec_summary: execSummary }),
       });
       if (!res.ok) throw new Error(`export failed (${res.status})`);
       const blob = await res.blob();
@@ -884,6 +949,63 @@ export default function Home() {
 
         {nav === "findings" && reports.length === 0 && (
           <div className="empty">No findings yet. <button className="linklike" onClick={() => setNav("scan")}>Start a scan →</button></div>
+        )}
+
+        {nav === "mitre" && (
+          reports.length === 0 ? (
+            <div className="empty">No findings to map yet. <button className="linklike" onClick={() => setNav("scan")}>Start a scan →</button></div>
+          ) : (() => {
+            const tactics = mitreMap(reports.flatMap((r) => r.findings || []));
+            const present = TACTIC_ORDER.filter((t) => tactics[t]);
+            return (
+              <div className="panel">
+                <div className="panel-head">🎯 MITRE ATT&CK Coverage <span className="badge">{present.filter((t) => t !== "Unmapped").length} tactic(s)</span></div>
+                <div className="ev-note" style={{ margin: "12px 16px" }}>
+                  Findings mapped to ATT&CK techniques by a deterministic rule set — an indicative mapping to aid triage, not an authoritative classification.
+                </div>
+                <div className="mitre-grid">
+                  {present.map((t) => (
+                    <div key={t} className={`mitre-col ${t === "Unmapped" ? "unmapped" : ""}`}>
+                      <div className="mitre-tac">{t}</div>
+                      {Object.values(tactics[t]).map((tech, i) => (
+                        <div key={i} className="mitre-tech">
+                          <div className="mitre-id">{tech.id}{tech.id !== "—" ? " · " : ""}{tech.name}</div>
+                          {tech.items.map((f, j) => (
+                            <div key={j} className="mitre-item">
+                              <span className={`sev sev-${(f.severity || "unknown").toLowerCase()}`}>{f.severity || "?"}</span>
+                              {f.name} <span className="fhost">{f.host}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()
+        )}
+
+        {nav === "summary" && (
+          reports.length === 0 ? (
+            <div className="empty">Run a scan first, then generate an executive summary. <button className="linklike" onClick={() => setNav("scan")}>Start a scan →</button></div>
+          ) : (
+            <div className="panel">
+              <div className="panel-head hist-head">
+                <span>📝 Executive Summary</span>
+                <button className="export-btn" onClick={generateSummary} disabled={execLoading}>
+                  {execLoading ? "Generating…" : execSummary ? "Regenerate" : "Generate"}
+                </button>
+              </div>
+              {!execSummary && !execLoading && (
+                <div className="empty" style={{ padding: "24px 16px" }}>
+                  Click <b>Generate</b> for a plain-English summary of risk posture and top actions — it's also embedded in the PDF export.
+                </div>
+              )}
+              {execLoading && <div className="muted" style={{ padding: "20px 16px" }}>Writing summary… (LLM)</div>}
+              {execSummary && !execLoading && <div className="exec-summary">{execSummary}</div>}
+            </div>
+          )
         )}
 
         {nav === "compare" && (

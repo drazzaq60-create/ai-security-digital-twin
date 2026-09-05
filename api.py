@@ -196,10 +196,55 @@ def simulate_endpoint(body: SimBody):
     return simulate_cut(body.nodes, body.edges, body.cut)
 
 
+class SummaryBody(BaseModel):
+    reports: List[dict] = []
+    correlation: Optional[dict] = None
+    graph: Optional[dict] = None
+
+
+def _exec_summary(reports, correlation, graph):
+    findings = [f for r in reports for f in (r.get("findings") or [])]
+    sev = {}
+    for f in findings:
+        s = f.get("severity", "Unknown")
+        sev[s] = sev.get(s, 0) + 1
+    paths = (graph or {}).get("paths", [])
+    ctx = {
+        "reports": [r.get("name") for r in reports],
+        "finding_count": len(findings),
+        "severity_counts": sev,
+        "top_findings": [f"{f.get('severity')}: {f.get('name')} @ {f.get('host')}" for f in findings[:12]],
+        "attack_paths": [{"path": " -> ".join(p.get("path", [])), "class": p.get("path_class"),
+                          "likelihood": p.get("likelihood")} for p in paths[:5]],
+        "topology_supplied": (graph or {}).get("topology_supplied", False),
+        "injection_reports": [r.get("name") for r in reports if (r.get("security") or {}).get("injection_detected")],
+        "correlation_related": (correlation or {}).get("related", False),
+    }
+    system = guardrails.INJECTION_DEFENSE + (
+        "You are a senior security analyst writing a concise EXECUTIVE SUMMARY for a technical "
+        "manager, using ONLY the analysis JSON. Structure with these headings: 'Risk posture:' "
+        "(one line), 'Key findings:' (3-5 short '- ' bullets), 'Recommended actions:' (3-5 "
+        "prioritized '- ' bullets). Be specific and HONEST: attack paths are hypothetical unless "
+        "topology was supplied; never claim exploitation, breach, or compromise. Keep it under ~200 words."
+    )
+    user = "ANALYSIS (JSON):\n" + json.dumps(ctx, indent=2)
+    return call_llm(system, user)
+
+
+@app.post("/exec-summary")
+async def exec_summary(body: SummaryBody):
+    """LLM-written executive summary of the analysis (honest about hypothetical paths)."""
+    if not body.reports:
+        return {"summary": ""}
+    text = await run_in_threadpool(_exec_summary, body.reports, body.correlation, body.graph)
+    return {"summary": (text or "").strip()}
+
+
 class RunBody(BaseModel):
     reports: List[dict] = []
     correlation: Optional[dict] = None
     graph: Optional[dict] = None
+    exec_summary: str = ""
 
 
 @app.post("/export-report")

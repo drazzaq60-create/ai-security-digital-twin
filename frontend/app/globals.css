@@ -77,6 +77,22 @@ html, body { margin: 0; padding: 0; color: var(--text);
 .cmp-item { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #cbd5e1;
   padding: 6px 0; border-top: 1px solid var(--border); }
 @media (max-width: 720px) { .cmp-cols { grid-template-columns: 1fr; } }
+
+/* MITRE ATT&CK */
+.mitre-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; padding: 0 16px 18px; align-items: start; }
+.mitre-col { border: 1px solid var(--border); border-radius: 9px; background: var(--panel-2); overflow: hidden; }
+.mitre-col.unmapped { opacity: .8; }
+.mitre-tac { background: rgba(46,197,239,.1); color: var(--mint-2); font-size: 11px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .6px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.mitre-col.unmapped .mitre-tac { background: rgba(148,163,184,.1); color: var(--muted); }
+.mitre-tech { padding: 9px 12px; border-bottom: 1px solid var(--border); }
+.mitre-tech:last-child { border-bottom: none; }
+.mitre-id { font-family: ui-monospace, monospace; font-size: 11.5px; color: #cbd5e1; font-weight: 700; margin-bottom: 6px; }
+.mitre-item { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #cbd5e1; padding: 3px 0; }
+
+/* Executive summary */
+.exec-summary { white-space: pre-wrap; padding: 16px 18px; font-size: 14px; line-height: 1.7; color: #dbe4ee;
+  border-left: 3px solid var(--mint); font-family: "Plus Jakarta Sans", system-ui, sans-serif; }
 .hist-head { display: flex; align-items: center; justify-content: space-between; }
 .run-list.wide { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; padding: 14px; }
 

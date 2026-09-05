@@ -78,6 +78,14 @@ def build_pdf(data):
     _p(pdf, f"Reports analyzed: {len(reports)}    Findings: {total_findings}    "
             f"Prompt-injection events: {injections}", color=MUTED)
 
+    # --- Executive summary (if generated) ---
+    summary_text = (data.get("exec_summary") or "").strip()
+    if summary_text:
+        _h2(pdf, "Executive Summary")
+        for line in summary_text.splitlines():
+            if line.strip():
+                _p(pdf, line)
+
     # --- Guardrails ---
     _h2(pdf, "Guardrails (LLM security)", color=MINT if injections == 0 else RED)
     if injections == 0:
