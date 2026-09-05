@@ -35,6 +35,11 @@ export default function Home() {
       const obj = JSON.parse(text);
       if (!obj || !Array.isArray(obj.edges)) throw new Error("missing an \"edges\" array");
       setTopology(obj); setTopoName(file.name); setError("");
+      // Apply it right away if an analysis already ran (rebuild only the graph, no re-extraction).
+      if (reports.some((r) => (r.findings || []).length)) {
+        logLine(`Applying topology "${file.name}" — rebuilding graph…`, "info");
+        rebuildGraph(obj);
+      }
     } catch (e) {
       setTopology(null); setTopoName("");
       setError(`Topology file invalid: ${(e && e.message) || "not JSON"}. Expected {"edges":[{"from","to","control"}]}.`);
@@ -960,7 +965,7 @@ function AttackSurface({ graph, sim, simCut, onSimulate, onClear }) {
           Potential paths to critical assets <span className="badge">{graph.paths.length}</span>
           <div className="paths-sub">
             {graph.topology_supplied ? (
-              <><b>Confirmed</b> = supplied-topology edges + an exploitable finding at every hop. Others remain hypothetical.</>
+              <><b>Topology-backed</b> = supplied-topology edges + an exploitable finding at every hop. This is <b>not</b> lab-validated exploitability (config, prerequisites and chaining are unverified). Others remain hypothetical.</>
             ) : (
               <>All paths are <b>hypothetical</b> — topology is inferred, not supplied. <b>Vuln-backed</b> = an exploitable finding at every hop; <b>exposure-only</b> = includes open-service steps. Upload a topology file for confirmed paths.</>
             )}
@@ -975,7 +980,7 @@ function AttackSurface({ graph, sim, simCut, onSimulate, onClear }) {
           <div key={i} className="path-row">
             <span className={`pclass ${pth.path_class}`}>
               {pth.path_class === "confirmed"
-                ? "CONFIRMED · topology-verified"
+                ? "TOPOLOGY-BACKED · vuln-supported"
                 : pth.path_class === "vuln"
                   ? "HYPOTHETICAL · vuln-backed"
                   : "HYPOTHETICAL · exposure-only"}

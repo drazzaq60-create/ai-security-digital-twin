@@ -73,10 +73,10 @@ flowchart TD
 
 - **Evidence-qualified edges.** Each edge is typed by what the evidence supports: `exploit` (a real vuln/CVE enables the step) vs `exposure` (an open service only — reachable, not a proven transition). An open port never becomes a claimed attack step.
 - **Nothing is overclaimed.** Topology (who reaches whom) is **not** in a vulnerability report, so without a supplied topology Sentinel **infers** it and every path is labeled **hypothetical** (vuln-backed vs exposure-only), with all assumptions listed in the UI.
-- **Supplied topology → Confirmed paths.** Upload a small topology JSON (`{"edges":[{"from","to","control"}]}`) and paths that use only supplied edges *and* have an exploitable finding at every hop are marked **Confirmed**. `control` (firewall / service / trust / permission …) drives control-specific remediation actions ("Block network route", "Restrict service exposure", "Revoke permission").
+- **Supplied topology → Topology-backed paths.** Upload a small topology JSON (`{"edges":[{"from","to","control"}]}`) and paths that use only supplied edges *and* have an exploitable finding at every hop are marked **Topology-backed, vulnerability-supported** — deliberately *not* "Confirmed", since exploitability-in-config, prerequisites and chaining aren't lab-validated. `control` (firewall / service / trust / permission …) drives control-specific remediation actions ("Block network route", "Restrict service exposure", "Revoke permission").
 - **Score** is a **heuristic priority = asset criticality × path exploit-likelihood**, where each hop's likelihood *multiplies* along the path — so a longer chain scores **lower**, and shared weaknesses aren't double-counted. A prioritization aid, **not** a breach probability.
 
-Example: with a supplied topology, `Internet → web01 → db01` (SQLi + MySQL CVE) is a **Confirmed** path; patching the web entry point drops reachable crown-jewels to zero. Without topology, the same findings yield **no** path — an honest result, not an invented one.
+Example: with a supplied topology, `Internet → web01 → db01` (SQLi + MySQL CVE) is a **Topology-backed** path; patching the web entry point drops reachable crown-jewels to zero. Without topology, the same findings yield **no** path — an honest result, not an invented one.
 
 ---
 

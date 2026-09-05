@@ -6,6 +6,7 @@
 #   - HIDDEN RISKS : dangers that emerge ONLY by combining tools (chains no single tool sees)
 
 import json
+import re
 from llm import call_llm
 from ingest_nmap import parse_nmap
 from ingest_vulns import parse_vuln_report
@@ -63,9 +64,36 @@ def correlate(findings):
     raw = call_llm(system, user)
     try:
         start, end = raw.find("{"), raw.rfind("}")
-        return json.loads(raw[start:end + 1]) if start != -1 and end != -1 else {"raw": raw}
+        result = json.loads(raw[start:end + 1]) if start != -1 and end != -1 else {"raw": raw}
     except Exception:
         return {"raw": raw}
+    # Deterministic guard: the prompt asks for cautious wording, but models don't always
+    # comply, so soften overclaiming phrases in the actual text before it reaches the user.
+    for key in ("corroborated", "hidden_risks"):
+        for item in result.get(key, []) or []:
+            if isinstance(item, dict):
+                item["summary"] = _soften(item.get("summary", ""))
+                item["why"] = _soften(item.get("why", ""))
+    return result
+
+
+# Overclaiming -> evidence-honest wording. Applied to correlation output text.
+_SOFTEN = [
+    (r"active(?:ly)?\s+exploit(?:ation|ed|ing)?", "possible exploitation activity"),
+    (r"successful(?:ly)?\s+exploit(?:ation|ed)?", "possible exploitation"),
+    (r"is\s+being\s+exploited", "may be being exploited"),
+    (r"confirmed\s+breach|breach\s+confirmed", "possible intrusion indicators"),
+    (r"\bcompromised\b", "showing suspicious activity"),
+    (r"\bproven\b", "suggested"),
+]
+
+
+def _soften(text):
+    if not text:
+        return text
+    for pat, repl in _SOFTEN:
+        text = re.sub(pat, repl, text, flags=re.IGNORECASE)
+    return text
 
 
 if __name__ == "__main__":
