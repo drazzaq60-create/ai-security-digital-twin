@@ -596,7 +596,17 @@ export default function Home() {
   return (
     <div className="shell">
       <nav className="rail">
-        <div className="rail-logo"><span className="rl-mark">🛡</span><span className="rl-word">SENTINEL</span></div>
+        <div className="rail-logo">
+          <svg className="rl-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <defs><linearGradient id="sg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#22c1e8" /><stop offset="1" stopColor="#0369a1" /></linearGradient></defs>
+            <path d="M12 2 20 5 V11 C20 16.5 16.5 20.6 12 22 C7.5 20.6 4 16.5 4 11 V5 Z" fill="url(#sg)" />
+            <path d="M8.4 12 L11 14.6 L16 8.6" fill="none" stroke="#fff" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <div className="rl-txt">
+            <div className="rl-word">SENTINEL<b>SEC</b></div>
+            <div className="rl-tag">Security Console</div>
+          </div>
+        </div>
         {RAIL.map((it) => {
           const enabled = it.id === "scan" || it.id === "history"
             || (it.id === "compare" ? runs.length >= 2 : reports.length > 0);
@@ -1136,15 +1146,60 @@ function Bars({ rows, colorFor }) {
   );
 }
 
+function Donut({ data }) {
+  const total = data.reduce((s, d) => s + d.value, 0) || 1;
+  const R = 42, C = 2 * Math.PI * R;
+  let off = 0;
+  return (
+    <div className="donut-wrap">
+      <svg viewBox="0 0 110 110" className="donut-svg">
+        <circle cx="55" cy="55" r={R} fill="none" stroke="var(--border)" strokeWidth="13" />
+        {data.filter((d) => d.value > 0).map((d, i) => {
+          const len = (d.value / total) * C;
+          const seg = (
+            <circle key={i} cx="55" cy="55" r={R} fill="none" stroke={d.color} strokeWidth="13"
+              strokeDasharray={`${len} ${C - len}`} strokeDashoffset={-off} transform="rotate(-90 55 55)" />
+          );
+          off += len; return seg;
+        })}
+        <text x="55" y="52" textAnchor="middle" className="donut-num">{total}</text>
+        <text x="55" y="67" textAnchor="middle" className="donut-lbl">findings</text>
+      </svg>
+      <div className="donut-legend">
+        {data.filter((d) => d.value > 0).map((d, i) => (
+          <div key={i} className="dleg"><span className="ddot" style={{ background: d.color }} />{d.label}<b>{d.value}</b></div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RiskGauge({ score }) {
+  const pct = Math.max(0, Math.min(100, Math.round(score)));
+  const band = pct >= 75 ? "Critical" : pct >= 50 ? "High" : pct >= 25 ? "Medium" : "Low";
+  const color = pct >= 75 ? "#dc2626" : pct >= 50 ? "#ea580c" : pct >= 25 ? "#b45309" : "#16a34a";
+  const cx = 80, cy = 78, R = 60;
+  const d = `M ${cx - R} ${cy} A ${R} ${R} 0 0 1 ${cx + R} ${cy}`;
+  return (
+    <svg viewBox="0 0 160 92" className="gauge-svg">
+      <path d={d} fill="none" stroke="var(--border)" strokeWidth="13" strokeLinecap="round" pathLength="100" />
+      <path d={d} fill="none" stroke={color} strokeWidth="13" strokeLinecap="round" pathLength="100" strokeDasharray={`${pct} 100`} />
+      <text x={cx} y={cy - 12} textAnchor="middle" style={{ fontSize: 30, fontWeight: 800, fill: color, fontFamily: "ui-monospace, monospace" }}>{pct}</text>
+      <text x={cx} y={cy + 4} textAnchor="middle" style={{ fontSize: 10.5, fill: "var(--muted)", letterSpacing: "1px" }}>{band.toUpperCase()} RISK</text>
+    </svg>
+  );
+}
+
 function OverviewCharts({ reports, graph }) {
   const [open, setOpen] = useState(true);
   const findings = reports.flatMap((r) => r.findings || []);
   const sev = Object.fromEntries(SEV_ORDER.map((s) => [s, 0]));
   findings.forEach((f) => { const s = SEV_ORDER.includes(f.severity) ? f.severity : "Unknown"; sev[s]++; });
-  const sevRows = SEV_ORDER.filter((s) => sev[s] > 0).map((s) => ({ label: s, value: sev[s] }));
   const repRows = reports.map((r) => ({ label: r.name, value: (r.findings || []).length }));
   const paths = graph?.paths || [];
   const topPri = paths.length ? paths[0].priority : 0;
+  const donutData = SEV_ORDER.filter((s) => sev[s] > 0).map((s) => ({ label: s, value: sev[s], color: SEV_COLOR[s] }));
+  const score = Math.min(100, sev.Critical * 20 + sev.High * 12 + sev.Medium * 6 + sev.Low * 2 + paths.length * 10);
 
   return (
     <div className="panel">
@@ -1154,9 +1209,13 @@ function OverviewCharts({ reports, graph }) {
       </div>
       {open && (
       <div className="dash">
+        <div className="dash-card center">
+          <div className="dash-title">Overall risk</div>
+          <RiskGauge score={score} />
+        </div>
         <div className="dash-card">
           <div className="dash-title">Findings by severity</div>
-          {sevRows.length ? <Bars rows={sevRows} colorFor={(r) => SEV_COLOR[r.label]} /> : <p className="muted">No findings.</p>}
+          {donutData.length ? <Donut data={donutData} /> : <p className="muted">No findings.</p>}
         </div>
         <div className="dash-card">
           <div className="dash-title">Findings by report</div>
