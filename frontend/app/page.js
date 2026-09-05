@@ -5,6 +5,40 @@ import { useState, useRef, useMemo, useEffect } from "react";
 // Configurable so a deployed build can point at a real backend, not the visitor's own PC.
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+const TOPOLOGY_TEMPLATE = {
+  _comment: "Topology = which asset can reach which (from your network/firewall knowledge; no scanner produces this). control: firewall | network | service | port | trust | identity | permission.",
+  assets: { db01: { criticality: 5 } },
+  edges: [
+    { from: "internet", to: "web01", control: "firewall" },
+    { from: "web01", to: "db01", control: "service" },
+  ],
+};
+const TEMPLATE_TEXT = JSON.stringify(TOPOLOGY_TEMPLATE, null, 2);
+
+const RAIL = [
+  { id: "scan", label: "Scan" },
+  { id: "overview", label: "Overview" },
+  { id: "paths", label: "Attack Paths" },
+  { id: "findings", label: "Findings" },
+  { id: "history", label: "History" },
+];
+const VIEW_TITLES = {
+  scan: "New Scan", overview: "Overview", paths: "Attack Paths",
+  findings: "Findings & Correlation", history: "Saved Analyses",
+};
+
+function RailIcon({ name }) {
+  const p = { fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round" };
+  const paths = {
+    scan: <><circle cx="11" cy="11" r="7" {...p} /><path d="M11 4v7l4.5 4.5" {...p} /></>,
+    overview: <><rect x="3" y="3" width="7" height="7" rx="1.5" {...p} /><rect x="12" y="3" width="7" height="7" rx="1.5" {...p} /><rect x="3" y="12" width="7" height="7" rx="1.5" {...p} /><rect x="12" y="12" width="7" height="7" rx="1.5" {...p} /></>,
+    paths: <><circle cx="4" cy="11" r="2.2" {...p} /><circle cx="18" cy="5" r="2.2" {...p} /><circle cx="18" cy="17" r="2.2" {...p} /><path d="M6 10 16 6M6 12l10 4" {...p} /></>,
+    findings: <><path d="M4 6h14M4 11h14M4 16h9" {...p} /><circle cx="18" cy="17" r="0.6" {...p} /></>,
+    history: <><circle cx="11" cy="11" r="7.5" {...p} /><path d="M11 6.5V11l3 2" {...p} /></>,
+  };
+  return <svg viewBox="0 0 22 22" width="18" height="18" aria-hidden="true">{paths[name]}</svg>;
+}
+
 export default function Home() {
   const [files, setFiles] = useState([]);
   const [message, setMessage] = useState("");
@@ -25,6 +59,7 @@ export default function Home() {
   const [hideTagged, setHideTagged] = useState(false);
   const [topology, setTopology] = useState(null);
   const [topoName, setTopoName] = useState("");
+  const [showTemplate, setShowTemplate] = useState(false);
   const inputRef = useRef(null);
   const topoRef = useRef(null);
 
@@ -56,15 +91,10 @@ export default function Home() {
     URL.revokeObjectURL(url);
   }
 
-  function downloadTemplate() {
-    downloadJson({
-      _comment: "Topology = which asset can reach which (from your network/firewall knowledge; no scanner produces this). control: firewall | network | service | port | trust | identity | permission. Replace the example hosts with yours.",
-      assets: { db01: { criticality: 5 } },
-      edges: [
-        { from: "internet", to: "web01", control: "firewall" },
-        { from: "web01", to: "db01", control: "service" },
-      ],
-    }, "topology-template.json");
+  function downloadTemplate() { downloadJson(TOPOLOGY_TEMPLATE, "topology-template.json"); }
+  async function copyTemplate() {
+    try { await navigator.clipboard.writeText(TEMPLATE_TEXT); logLine("Topology template copied to clipboard", "ok"); }
+    catch { setError("Copy failed — select the text in the box and copy manually."); }
   }
 
   // Rebuild ONLY the graph (no re-extraction) using the given topology — instant.
@@ -138,13 +168,26 @@ export default function Home() {
     }
   }
 
+  const [backendUp, setBackendUp] = useState(null);  // null=unknown, true/false
+  const [nav, setNav] = useState("scan");
+
   async function loadRuns() {
     try {
       const r = await fetch(`${API_URL}/runs`);
       if (r.ok) { const d = await r.json(); setRuns(d.runs || []); }
     } catch { /* history is best-effort */ }
   }
-  useEffect(() => { loadRuns(); }, []);
+  async function pingHealth() {
+    try {
+      const r = await fetch(`${API_URL}/health`, { cache: "no-store" });
+      setBackendUp(r.ok);
+    } catch { setBackendUp(false); }
+  }
+  useEffect(() => {
+    loadRuns(); pingHealth();
+    const t = setInterval(pingHealth, 30000);
+    return () => clearInterval(t);
+  }, []);
 
   function addFiles(list) {
     const incoming = Array.from(list);
@@ -324,6 +367,7 @@ export default function Home() {
         if (sRes.ok) { const sd = await sRes.json(); setRunMeta(sd.meta || null); }
         loadRuns();
       } catch { /* best-effort */ }
+      setNav("overview");  // jump to results once the scan completes
     } catch (e) {
       const m = errMsg(e);
       if (m !== "cancelled") setError(`${m} — is the backend running on :8000?`);
@@ -406,6 +450,7 @@ export default function Home() {
       setGraphError(""); setSim(null); setSimCut(null); setError("");
       setRunMeta(d.meta || null);
       setLog([{ text: `Loaded saved analysis ${id}`, kind: "done", t: new Date().toLocaleTimeString() }]);
+      setNav("overview");
     } catch { /* ignore */ }
   }
 
@@ -461,11 +506,28 @@ export default function Home() {
   const nHidden = related ? (correlation?.hidden_risks?.length || 0) : 0;
 
   return (
-    <div className="app">
-      <aside className="sidebar">
-        <div className="brand">🛡️ <span>Sentinel</span></div>
-        <div className="brand-sub">Security Console</div>
+    <div className="shell">
+      <nav className="rail">
+        <div className="rail-logo"><span className="rl-mark">🛡</span><span className="rl-word">SENTINEL</span></div>
+        {RAIL.map((it) => (
+          <button key={it.id} className={`rail-item ${nav === it.id ? "active" : ""}`} onClick={() => setNav(it.id)}>
+            <RailIcon name={it.id} /><span>{it.label}</span>
+          </button>
+        ))}
+        <div className="rail-foot">Sentinel Security</div>
+      </nav>
 
+      <main className="workspace">
+        <header className="ws-head">
+          <h1>{VIEW_TITLES[nav]}</h1>
+          <div className="ws-actions">
+            {reports.length > 0 && !running && <button className="export-btn" onClick={exportPdf}>⬇ Export PDF</button>}
+          </div>
+        </header>
+        <div className={`ws-body ${nav === "scan" ? "scan" : ""}`}>
+
+      {nav === "scan" && (
+      <aside className="sidebar">
         <div className="side-label">Reports</div>
         <div
           className={`drop ${dragging ? "drag" : ""}`}
@@ -509,10 +571,19 @@ export default function Home() {
           No scanner outputs this — it maps which assets can reach which (from your
           network/firewall knowledge). Paths that use it become <b>Confirmed</b>.
           <div className="topo-links">
-            <button className="linklike" onClick={downloadTemplate}>Download template</button>
+            <button className="linklike" onClick={() => setShowTemplate((v) => !v)}>{showTemplate ? "Hide template" : "View template"}</button>
             {graph?.nodes?.length > 1 && <button className="linklike" onClick={suggestTopology}>Suggest from reports</button>}
             {topoName && <button className="linklike" onClick={() => downloadJson(topology, topoName)}>Download current</button>}
           </div>
+          {showTemplate && (
+            <div className="tmpl-box">
+              <pre>{TEMPLATE_TEXT}</pre>
+              <div className="tmpl-actions">
+                <button className="linklike" onClick={copyTemplate}>Copy</button>
+                <button className="linklike" onClick={downloadTemplate}>Download .json</button>
+              </div>
+            </div>
+          )}
         </div>
         <input ref={topoRef} type="file" accept=".json,application/json" hidden
           onChange={(e) => loadTopology(e.target.files?.[0])} />
@@ -532,68 +603,38 @@ export default function Home() {
         )}
         {error && <div className="err-box">{error}</div>}
 
-        {runs.length > 0 && (
-          <>
-            <div className="side-label hist-label">
-              <span>History</span>
-              {runs.some((r) => r.tag) && (
-                <button className="hist-filter" onClick={() => setHideTagged((v) => !v)}>
-                  {hideTagged ? "show all" : "hide test/demo"}
-                </button>
-              )}
-            </div>
-            <div className="run-list">
-              {(hideTagged ? runs.filter((r) => !r.tag) : runs).slice(0, 10).map((r) => (
-                <div key={r.id} className="run-item">
-                  <div className="run-open" onClick={() => loadRun(r.id)} title={r.id}>
-                    <span className="run-names">
-                      {r.label || (r.names || []).join(", ") || "—"}
-                      {r.tag && <span className={`run-tag ${r.tag}`}>{r.tag}</span>}
-                    </span>
-                    <span className="run-meta">{r.reports} report(s) · {r.findings} findings</span>
-                  </div>
-                  <div className="run-actions">
-                    <button title="Rename" onClick={() => renameRun(r)}>✎</button>
-                    <button title="Tag (test / demo)" onClick={() => tagRun(r)}>🏷</button>
-                    <button title="Delete" onClick={() => deleteRun(r.id)}>🗑</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
       </aside>
+      )}
 
-      <main className="main">
-        <div className="topbar">
-          <div className="topbar-left">
-            <h1>Analysis Console</h1>
-            {reports.length > 0 && !running && (
-              <button className="export-btn" onClick={exportPdf}>⬇ Export PDF</button>
-            )}
-          </div>
-          <div className="stat-row">
-            <Stat n={reports.length} label="Reports" />
-            <Stat n={totalFindings} label="Findings" />
-            <Stat n={nCorroborated} label="Corroborated" tone="ok" />
-            <Stat n={nHidden} label="Hidden" tone="danger" />
-            {injectionReports.length > 0 && <Stat n={injectionReports.length} label="Injection" tone="danger" />}
-            {failedCount > 0 && <Stat n={failedCount} label="Failed" tone="danger" />}
-          </div>
+      {nav === "scan" && (
+      <div className="panel logpanel">
+        <div className="panel-head">● Live Activity</div>
+        <div className="console">
+          {log.length === 0 && <div className="muted">Add reports on the left, then Run Analysis — results open in Overview.</div>}
+          {log.map((l, i) => (
+            <div key={i} className={`ln ${l.kind}`}><span className="ts">{l.t}</span> {l.text}</div>
+          ))}
         </div>
+      </div>
+      )}
 
-        <div className="panel">
-          <div className="panel-head">● Live Activity</div>
-          <div className="console">
-            {log.length === 0 && <div className="muted">Waiting to run — add reports and click Run Analysis.</div>}
-            {log.map((l, i) => (
-              <div key={i} className={`ln ${l.kind}`}><span className="ts">{l.t}</span> {l.text}</div>
-            ))}
-          </div>
+      {nav === "overview" && reports.length === 0 && (
+        <div className="empty">No analysis yet. <button className="linklike" onClick={() => setNav("scan")}>Start a scan →</button></div>
+      )}
+
+      {nav === "overview" && reports.length > 0 && (
+        <div className="stat-row">
+          <Stat n={reports.length} label="Reports" />
+          <Stat n={totalFindings} label="Findings" />
+          <Stat n={nCorroborated} label="Corroborated" tone="ok" />
+          <Stat n={nHidden} label="Hidden" tone="danger" />
+          {injectionReports.length > 0 && <Stat n={injectionReports.length} label="Injection" tone="danger" />}
+          {failedCount > 0 && <Stat n={failedCount} label="Failed" tone="danger" />}
         </div>
+      )}
 
         {/* Provenance — makes a saved/restored analysis self-describing and auditable. */}
-        {runMeta && (
+        {nav === "overview" && runMeta && (
           <div className="panel">
             <div className="panel-head">🧾 Run Provenance</div>
             <div className="prov">
@@ -627,7 +668,7 @@ export default function Home() {
         )}
 
         {/* Guardrails — LLM security. Shows prompt-injection scan results per report. */}
-        {reports.length > 0 && (
+        {nav === "overview" && reports.length > 0 && (
           <div className="panel">
             <div className="panel-head">🛡️ Guardrails — LLM Security</div>
             <div className="gr-body">
@@ -678,7 +719,7 @@ export default function Home() {
         )}
 
         {/* Prioritized fixes, grouped by report name; correlated fixes last */}
-        {okReports.length > 0 && (
+        {nav === "overview" && okReports.length > 0 && (
           <div className="panel">
             <div className="panel-head">🎯 Prioritized Fixes</div>
             <div className="fixes">
@@ -706,7 +747,7 @@ export default function Home() {
         )}
 
         {/* Cross-tool correlation — only shown once a real correlate result (or failure) exists */}
-        {(correlation || correlationError) && (
+        {nav === "findings" && (correlation || correlationError) && (
           <div className="panel">
             <div className="panel-head">🔗 Cross-Tool Correlation</div>
             {correlationError ? (
@@ -741,13 +782,13 @@ export default function Home() {
         )}
 
         {/* Attack-surface graph + what-if simulation — the core reasoning engine */}
-        {graphError && (
+        {nav === "paths" && graphError && (
           <div className="panel">
             <div className="panel-head">🕸️ Attack Surface</div>
             <div className="fail-box" style={{ margin: 14 }}>⚠ Graph build failed: {graphError}. Re-run to retry.</div>
           </div>
         )}
-        {graph && graph.nodes && graph.nodes.length > 1 && (
+        {nav === "paths" && graph && graph.nodes && graph.nodes.length > 1 && (
           <div className="panel">
             <div className="panel-head">🕸️ Attack Surface & What-If Simulation</div>
             <AttackSurface
@@ -761,7 +802,7 @@ export default function Home() {
         )}
 
         {/* Per-report findings + that report's false positives */}
-        {reports.length > 0 && (
+        {nav === "findings" && reports.length > 0 && (
           <div className="panel">
             <div className="panel-head">📄 Findings by Report</div>
             {reports.map((r, i) => (
@@ -812,6 +853,48 @@ export default function Home() {
             ))}
           </div>
         )}
+
+        {nav === "paths" && !graphError && !(graph && graph.nodes && graph.nodes.length > 1) && (
+          <div className="empty">No attack paths to show yet.{reports.length > 0 ? " Add a topology (or click “Suggest from reports”) to connect assets into paths." : ""} <button className="linklike" onClick={() => setNav("scan")}>Go to Scan →</button></div>
+        )}
+
+        {nav === "findings" && reports.length === 0 && (
+          <div className="empty">No findings yet. <button className="linklike" onClick={() => setNav("scan")}>Start a scan →</button></div>
+        )}
+
+        {nav === "history" && (
+          runs.length === 0 ? (
+            <div className="empty">No saved analyses yet — every scan you run is saved here.</div>
+          ) : (
+            <div className="panel">
+              <div className="panel-head hist-head">
+                <span>🕘 Saved Analyses</span>
+                {runs.some((r) => r.tag) && (
+                  <button className="hist-filter" onClick={() => setHideTagged((v) => !v)}>{hideTagged ? "show all" : "hide test/demo"}</button>
+                )}
+              </div>
+              <div className="run-list wide">
+                {(hideTagged ? runs.filter((r) => !r.tag) : runs).map((r) => (
+                  <div key={r.id} className="run-item">
+                    <div className="run-open" onClick={() => loadRun(r.id)} title={r.id}>
+                      <span className="run-names">
+                        {r.label || (r.names || []).join(", ") || "—"}
+                        {r.tag && <span className={`run-tag ${r.tag}`}>{r.tag}</span>}
+                      </span>
+                      <span className="run-meta">{r.reports} report(s) · {r.findings} findings</span>
+                    </div>
+                    <div className="run-actions">
+                      <button title="Rename" onClick={() => renameRun(r)}>✎</button>
+                      <button title="Tag (test / demo)" onClick={() => tagRun(r)}>🏷</button>
+                      <button title="Delete" onClick={() => deleteRun(r.id)}>🗑</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        )}
+        </div>
       </main>
     </div>
   );
