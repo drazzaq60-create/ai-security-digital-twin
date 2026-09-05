@@ -217,6 +217,7 @@ export default function Home() {
 
   const [backendUp, setBackendUp] = useState(null);  // null=unknown, true/false
   const [nav, setNav] = useState("scan");
+  const [scanMode, setScanMode] = useState("manual");  // manual (report upload) | auto (live scan, future)
   const [cmpA, setCmpA] = useState("");
   const [cmpB, setCmpB] = useState("");
   const [cmpResult, setCmpResult] = useState(null);
@@ -596,11 +597,19 @@ export default function Home() {
     <div className="shell">
       <nav className="rail">
         <div className="rail-logo"><span className="rl-mark">🛡</span><span className="rl-word">SENTINEL</span></div>
-        {RAIL.map((it) => (
-          <button key={it.id} className={`rail-item ${nav === it.id ? "active" : ""}`} onClick={() => setNav(it.id)}>
-            <RailIcon name={it.id} /><span>{it.label}</span>
-          </button>
-        ))}
+        {RAIL.map((it) => {
+          const enabled = it.id === "scan" || it.id === "history"
+            || (it.id === "compare" ? runs.length >= 2 : reports.length > 0);
+          return (
+            <button key={it.id} disabled={!enabled}
+              className={`rail-item ${nav === it.id ? "active" : ""} ${!enabled ? "locked" : ""}`}
+              title={!enabled ? (it.id === "compare" ? "Needs 2 saved analyses" : "Run a scan first") : ""}
+              onClick={() => enabled && setNav(it.id)}>
+              <RailIcon name={it.id} /><span>{it.label}</span>
+              {!enabled && <span className="lock">🔒</span>}
+            </button>
+          );
+        })}
         <div className="rail-foot">Sentinel Security</div>
       </nav>
 
@@ -614,7 +623,14 @@ export default function Home() {
         <div className={`ws-body ${nav === "scan" ? "scan" : ""}`}>
 
       {nav === "scan" && (
-      <aside className="sidebar">
+      <div className="scanview">
+        <div className="scan-modes">
+          <button className={`smode ${scanMode === "manual" ? "active" : ""}`} onClick={() => setScanMode("manual")}>📄 Manual — report upload</button>
+          <button className={`smode ${scanMode === "auto" ? "active" : ""}`} onClick={() => setScanMode("auto")}>📡 Automatic — live scan</button>
+        </div>
+        {scanMode === "manual" ? (
+        <div className="scan-grid">
+        <aside className="sidebar">
         <div className="side-label">Reports</div>
         <div
           className={`drop ${dragging ? "drag" : ""}`}
@@ -691,10 +707,7 @@ export default function Home() {
         {error && <div className="err-box">{error}</div>}
 
       </aside>
-      )}
-
-      {nav === "scan" && (
-      <div className="panel logpanel">
+        <div className="panel logpanel">
         <div className="panel-head">● Live Activity</div>
         <div className="console">
           {log.length === 0 && <div className="muted">Add reports on the left, then Run Analysis — results open in Overview.</div>}
@@ -702,6 +715,14 @@ export default function Home() {
             <div key={i} className={`ln ${l.kind}`}><span className="ts">{l.t}</span> {l.text}</div>
           ))}
         </div>
+      </div>
+        </div>
+        ) : (
+        <div className="panel">
+          <div className="panel-head">📡 Automatic — live scan (coming soon)</div>
+          <p className="pad muted">Run real scanners directly from Sentinel — Nmap, OWASP ZAP, Nessus/OpenVAS, Wazuh — against <b>authorized</b> targets, then feed results into the same pipeline (findings → correlation → attack paths → guardrails). Planned. For now, run scanners externally and upload the reports under <b>Manual</b>.</p>
+        </div>
+        )}
       </div>
       )}
 
@@ -1116,6 +1137,7 @@ function Bars({ rows, colorFor }) {
 }
 
 function OverviewCharts({ reports, graph }) {
+  const [open, setOpen] = useState(true);
   const findings = reports.flatMap((r) => r.findings || []);
   const sev = Object.fromEntries(SEV_ORDER.map((s) => [s, 0]));
   findings.forEach((f) => { const s = SEV_ORDER.includes(f.severity) ? f.severity : "Unknown"; sev[s]++; });
@@ -1126,7 +1148,11 @@ function OverviewCharts({ reports, graph }) {
 
   return (
     <div className="panel">
-      <div className="panel-head">📊 Dashboard</div>
+      <div className="panel-head hist-head">
+        <span>📊 Dashboard</span>
+        <button className="linklike" onClick={() => setOpen((o) => !o)}>{open ? "Hide ▲" : "Show ▼"}</button>
+      </div>
+      {open && (
       <div className="dash">
         <div className="dash-card">
           <div className="dash-title">Findings by severity</div>
@@ -1143,6 +1169,7 @@ function OverviewCharts({ reports, graph }) {
           <div className="metric"><span>{topPri}</span> top path priority</div>
         </div>
       </div>
+      )}
     </div>
   );
 }
