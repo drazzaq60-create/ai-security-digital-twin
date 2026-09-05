@@ -259,6 +259,7 @@ def list_runs():
         reports = d.get("reports", []) or []
         out.append({
             "id": d.get("_id", fn[:-5]), "created": d.get("_created"),
+            "label": d.get("label"), "tag": d.get("tag"),
             "reports": len(reports),
             "findings": sum(len(r.get("findings", []) or []) for r in reports),
             "names": [r.get("name") for r in reports][:4],
@@ -275,3 +276,39 @@ def get_run(run_id: str):
         return {"error": "not found"}
     with open(p, encoding="utf-8") as f:
         return json.load(f)
+
+
+class RunUpdate(BaseModel):
+    label: Optional[str] = None
+    tag: Optional[str] = None
+
+
+@app.post("/runs/{run_id}/update")
+def update_run(run_id: str, body: RunUpdate):
+    """Rename (label) or tag a saved run."""
+    safe = os.path.basename(run_id)
+    p = os.path.join(RUNS_DIR, safe + ".json")
+    if not os.path.exists(p):
+        return {"error": "not found"}
+    with open(p, encoding="utf-8") as f:
+        d = json.load(f)
+    if body.label is not None:
+        d["label"] = body.label[:80]
+    if body.tag is not None:
+        d["tag"] = body.tag[:24]
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(d, f)
+    return {"ok": True}
+
+
+@app.delete("/runs/{run_id}")
+def delete_run(run_id: str):
+    """Delete a saved run."""
+    safe = os.path.basename(run_id)
+    p = os.path.join(RUNS_DIR, safe + ".json")
+    if os.path.exists(p):
+        try:
+            os.remove(p)
+        except Exception as e:
+            return {"error": str(e)}
+    return {"ok": True}

@@ -319,6 +319,38 @@ export default function Home() {
     } catch { /* ignore */ }
   }
 
+  async function renameRun(r) {
+    const label = window.prompt("Rename this analysis:", r.label || (r.names || []).join(", "));
+    if (label === null) return;
+    try {
+      await fetch(`${API_URL}/runs/${r.id}/update`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label }),
+      });
+      loadRuns();
+    } catch { /* best-effort */ }
+  }
+
+  async function tagRun(r) {
+    const order = ["", "test", "demo"];  // cycle: none -> test -> demo -> none
+    const next = order[(order.indexOf(r.tag || "") + 1) % order.length];
+    try {
+      await fetch(`${API_URL}/runs/${r.id}/update`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tag: next }),
+      });
+      loadRuns();
+    } catch { /* best-effort */ }
+  }
+
+  async function deleteRun(id) {
+    if (!window.confirm("Delete this saved analysis? This cannot be undone.")) return;
+    try {
+      await fetch(`${API_URL}/runs/${id}`, { method: "DELETE" });
+      loadRuns();
+    } catch { /* best-effort */ }
+  }
+
   const okReports = reports.filter((r) => r.status !== "failed");
   const totalFindings = reports.reduce((n, r) => n + (r.findings?.length || 0), 0);
   const failedCount = reports.filter((r) => r.status === "failed").length;
@@ -390,11 +422,21 @@ export default function Home() {
           <>
             <div className="side-label">History</div>
             <div className="run-list">
-              {runs.slice(0, 8).map((r) => (
-                <button key={r.id} className="run-item" onClick={() => loadRun(r.id)} title={r.id}>
-                  <span className="run-names">{(r.names || []).join(", ") || "—"}</span>
-                  <span className="run-meta">{r.reports} report(s) · {r.findings} findings</span>
-                </button>
+              {runs.slice(0, 10).map((r) => (
+                <div key={r.id} className="run-item">
+                  <div className="run-open" onClick={() => loadRun(r.id)} title={r.id}>
+                    <span className="run-names">
+                      {r.label || (r.names || []).join(", ") || "—"}
+                      {r.tag && <span className={`run-tag ${r.tag}`}>{r.tag}</span>}
+                    </span>
+                    <span className="run-meta">{r.reports} report(s) · {r.findings} findings</span>
+                  </div>
+                  <div className="run-actions">
+                    <button title="Rename" onClick={() => renameRun(r)}>✎</button>
+                    <button title="Tag (test / demo)" onClick={() => tagRun(r)}>🏷</button>
+                    <button title="Delete" onClick={() => deleteRun(r.id)}>🗑</button>
+                  </div>
+                </div>
               ))}
             </div>
           </>

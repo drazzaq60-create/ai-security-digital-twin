@@ -68,11 +68,21 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
 
 /* Saved-runs history */
 .run-list { display: flex; flex-direction: column; gap: 6px; }
-.run-item { text-align: left; background: var(--panel-2); border: 1px solid var(--border);
-  border-radius: 9px; padding: 8px 11px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.run-item { background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px;
+  display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 11px; }
 .run-item:hover { border-color: var(--mint); }
+.run-open { flex: 1; min-width: 0; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
 .run-names { font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-meta { font-size: 11px; color: var(--muted); }
+.run-tag { margin-left: 6px; font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px;
+  border-radius: 5px; padding: 1px 6px; }
+.run-tag.test { background: rgba(245,158,11,.16); color: #fcd34d; }
+.run-tag.demo { background: rgba(59,130,246,.16); color: #93c5fd; }
+.run-actions { display: flex; gap: 1px; opacity: 0; transition: opacity .12s; }
+.run-item:hover .run-actions { opacity: 1; }
+.run-actions button { background: none; border: none; color: var(--muted); cursor: pointer;
+  font-size: 12px; padding: 3px 4px; border-radius: 5px; }
+.run-actions button:hover { color: var(--text); background: rgba(255,255,255,.06); }
 .stat-row { display: flex; gap: 12px; }
 .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px; text-align: center; min-width: 78px; }
 .stat-n { font-size: 22px; font-weight: 800; font-family: ui-monospace, monospace; }
