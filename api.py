@@ -163,7 +163,9 @@ async def correlate_endpoint(body: Findings):
     # Guarantee the shape the frontend expects, even if the model returned junk.
     result.setdefault("related", False)
     result.setdefault("scope", "")
-    for k in ("confirmed", "hidden_risks", "common_fixes"):
+    if "corroborated" not in result and "confirmed" in result:  # tolerate old key
+        result["corroborated"] = result.pop("confirmed")
+    for k in ("corroborated", "hidden_risks", "common_fixes"):
         if not isinstance(result.get(k), list):
             result[k] = []
     return {"correlation": result}

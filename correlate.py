@@ -42,17 +42,21 @@ def correlate(findings):
         "STEP 1 - Decide relatedness: compare host/asset/domain/scope and decide whether the reports "
         "concern the SAME target/environment or DIFFERENT, unrelated targets.\n"
         "STRICT RULES (follow exactly):\n"
-        "- CONFIRMED: include an issue ONLY if two or more tools report the SAME issue on the SAME "
-        "asset/host. Never across different assets or unrelated reports.\n"
+        "- CORROBORATED: include an issue ONLY if two or more tools report the SAME issue on the SAME "
+        "asset/host. 'Corroborated' means multiple sources AGREE - it does NOT mean the issue is proven "
+        "exploitable or human-verified. Never across different assets or unrelated reports.\n"
         "- HIDDEN_RISKS: combine findings ONLY on the same or clearly connected assets in one "
         "environment. Never invent a chain across unrelated targets.\n"
+        "- LANGUAGE (important): do NOT claim 'active exploitation', 'confirmed breach', 'compromised', "
+        "or 'proven' UNLESS the findings include direct telemetry of successful exploitation. Otherwise "
+        "use cautious wording: 'possible', 'suggests', 'corroborated by', 'consistent with'.\n"
         "- COMMON_FIXES: shared remediations addressing multiple correlated findings - ONLY when related.\n"
-        "- If the reports cover DIFFERENT, unrelated targets, set related=false and return EMPTY confirmed, "
-        "hidden_risks and common_fixes. Do NOT fabricate correlations. Empty is the correct answer.\n"
+        "- If the reports cover DIFFERENT, unrelated targets, set related=false and return EMPTY "
+        "corroborated, hidden_risks and common_fixes. Do NOT fabricate correlations. Empty is correct.\n"
         "- If unsure whether two findings relate, do NOT correlate them.\n"
         'Return ONLY a JSON object: {"scope": "one sentence: same target or different/unrelated?", '
-        '"related": true or false, "confirmed": [], "hidden_risks": [], "common_fixes": []}. '
-        'confirmed/hidden_risks items: {"summary": "...", "hosts": [...], "tools": [...], "why": "..."}; '
+        '"related": true or false, "corroborated": [], "hidden_risks": [], "common_fixes": []}. '
+        'corroborated/hidden_risks items: {"summary": "...", "hosts": [...], "tools": [...], "why": "..."}; '
         "common_fixes is an array of short strings. Base everything ONLY on the findings provided."
     )
     user = "COMBINED FINDINGS (JSON):\n" + json.dumps(findings, indent=2)
@@ -70,7 +74,7 @@ if __name__ == "__main__":
     result = correlate(findings)
     print(f"scope: {result.get('scope', '')}")
     print(f"related: {result.get('related')}\n")
-    for section, label in [("confirmed", "CONFIRMED (multiple tools agree)"),
+    for section, label in [("corroborated", "CORROBORATED (multiple tools agree)"),
                            ("hidden_risks", "HIDDEN / CHAINED RISKS")]:
         print(f"=== {label} ===")
         for item in result.get(section, []):

@@ -22,6 +22,7 @@ export default function Home() {
   const [runs, setRuns] = useState([]);
   const [runMeta, setRunMeta] = useState(null);
   const [elapsed, setElapsed] = useState(0);
+  const [hideTagged, setHideTagged] = useState(false);
   const inputRef = useRef(null);
   const abortRef = useRef(null);
   const timerRef = useRef(null);
@@ -366,7 +367,8 @@ export default function Home() {
     passedReports.every((r) => typeof r.security.output_ok === "boolean");
   const related = !!correlation?.related && !correlationError;
   const commonFixes = related ? (correlation?.common_fixes || []) : [];
-  const nConfirmed = related ? (correlation?.confirmed?.length || 0) : 0;
+  const corroboratedItems = correlation?.corroborated || correlation?.confirmed || [];  // back-compat
+  const nCorroborated = related ? corroboratedItems.length : 0;
   const nHidden = related ? (correlation?.hidden_risks?.length || 0) : 0;
 
   return (
@@ -420,9 +422,16 @@ export default function Home() {
 
         {runs.length > 0 && (
           <>
-            <div className="side-label">History</div>
+            <div className="side-label hist-label">
+              <span>History</span>
+              {runs.some((r) => r.tag) && (
+                <button className="hist-filter" onClick={() => setHideTagged((v) => !v)}>
+                  {hideTagged ? "show all" : "hide test/demo"}
+                </button>
+              )}
+            </div>
             <div className="run-list">
-              {runs.slice(0, 10).map((r) => (
+              {(hideTagged ? runs.filter((r) => !r.tag) : runs).slice(0, 10).map((r) => (
                 <div key={r.id} className="run-item">
                   <div className="run-open" onClick={() => loadRun(r.id)} title={r.id}>
                     <span className="run-names">
@@ -454,7 +463,7 @@ export default function Home() {
           <div className="stat-row">
             <Stat n={reports.length} label="Reports" />
             <Stat n={totalFindings} label="Findings" />
-            <Stat n={nConfirmed} label="Confirmed" tone="ok" />
+            <Stat n={nCorroborated} label="Corroborated" tone="ok" />
             <Stat n={nHidden} label="Hidden" tone="danger" />
             {injectionReports.length > 0 && <Stat n={injectionReports.length} label="Injection" tone="danger" />}
             {failedCount > 0 && <Stat n={failedCount} label="Failed" tone="danger" />}
@@ -601,10 +610,16 @@ export default function Home() {
                   </div>
                 )}
                 {related ? (
-                  <div className="cols">
-                    <Corr title="Confirmed" items={correlation.confirmed} cls="ok" />
-                    <Corr title="Hidden / Chained Risks" items={correlation.hidden_risks} cls="danger" />
-                  </div>
+                  <>
+                    <div className="ev-note">
+                      Evidence states: <b>Corroborated</b> = multiple tools agree (not proven exploitable
+                      or human-verified). Nothing here is claimed as exploited unless telemetry proves it.
+                    </div>
+                    <div className="cols">
+                      <Corr title="Corroborated" items={corroboratedItems} cls="ok" />
+                      <Corr title="Hidden / Chained Risks" items={correlation.hidden_risks} cls="danger" />
+                    </div>
+                  </>
                 ) : (
                   <p className="muted pad">No cross-tool correlation — these reports cover different targets, so each is analyzed separately (see per-report fixes and findings).</p>
                 )}
