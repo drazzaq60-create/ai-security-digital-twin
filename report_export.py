@@ -22,7 +22,7 @@ class _PDF(FPDF):
     def header(self):
         self.set_font("Helvetica", "B", 9)
         self.set_text_color(*MUTED)
-        self.cell(0, 8, "Sentinel - Security Digital Twin", align="L")
+        self.cell(0, 8, "Sentinel Security", align="L")
         self.cell(0, 8, datetime.now().strftime("%Y-%m-%d %H:%M"), align="R", new_x="LMARGIN", new_y="NEXT")
         self.ln(2)
 

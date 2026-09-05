@@ -1,6 +1,6 @@
 # web_graph.py
 # Builds an attack-surface graph FROM THE UPLOADED FINDINGS (not a hardcoded topology),
-# so the Digital Twin is tied to real evidence. It is deliberately honest about what it
+# so the model is tied to real evidence. It is deliberately honest about what it
 # does and does not know:
 #
 #   * Topology (who can reach whom) is NOT in a vulnerability report. We INFER it with

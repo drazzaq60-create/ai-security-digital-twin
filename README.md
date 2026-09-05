@@ -1,4 +1,4 @@
-# 🛡️ Sentinel — AI Security Digital Twin & Attack-Path Reasoning Engine
+# 🛡️ Sentinel Security — Attack-Path Reasoning Engine
 
 Sentinel turns raw security reports from **any tool** into a live model of your environment: it extracts findings, correlates them across tools, builds an **attack-path graph** to your crown-jewel assets, simulates **which single fix removes the most risk**, and does it all behind a hardened **LLM-security layer** that detects and defeats prompt-injection in uploaded reports.
 

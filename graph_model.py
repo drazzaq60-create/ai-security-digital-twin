@@ -1,5 +1,5 @@
 # graph_model.py
-# The shared "digital twin" graph: build it, score paths, find attack paths.
+# The shared attack graph: build it, score paths, find attack paths.
 # Criticality is stored as a NODE attribute so ANY graph (hand-made OR built from a
 # real scan) works with the same scoring + attack-path functions.
 

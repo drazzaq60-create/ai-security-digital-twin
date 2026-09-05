@@ -38,7 +38,7 @@ APP_VERSION = "0.5"
 RUNS_DIR = os.path.join(os.path.dirname(__file__), "runs")
 os.makedirs(RUNS_DIR, exist_ok=True)
 
-app = FastAPI(title="Sentinel Digital Twin API")
+app = FastAPI(title="Sentinel Security API")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )

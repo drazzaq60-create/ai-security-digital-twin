@@ -9,8 +9,8 @@ import networkx as nx
 from graph_model import build_graph, find_attack_paths
 from simulate import compare_fixes, total_risk
 
-st.set_page_config(page_title="Security Digital Twin", layout="wide")
-st.title("🛡️ Security Digital Twin — Attack-Path & Remediation Engine")
+st.set_page_config(page_title="Sentinel Security", layout="wide")
+st.title("🛡️ Sentinel Security — Attack-Path & Remediation Engine")
 
 G = build_graph()
 SOURCE, TARGET = "Internet", "Database"

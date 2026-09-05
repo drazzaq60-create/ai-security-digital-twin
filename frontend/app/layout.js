@@ -1,7 +1,7 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "Sentinel — Security Digital Twin",
+  title: "Sentinel Security",
   description: "AI-driven attack-path analysis and cross-tool correlation",
 };
 

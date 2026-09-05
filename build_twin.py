@@ -70,7 +70,7 @@ def build_twin():
 
 if __name__ == "__main__":
     G, alerts = build_twin()
-    print("Digital Twin built from 4 tools: Nmap + Vuln scanner + OWASP ZAP + Wazuh.\n")
+    print("Attack graph built from 4 tools: Nmap + Vuln scanner + OWASP ZAP + Wazuh.\n")
 
     print("Live alerts (from Wazuh):")
     for host, items in alerts.items():

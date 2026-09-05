@@ -464,7 +464,7 @@ export default function Home() {
     <div className="app">
       <aside className="sidebar">
         <div className="brand">🛡️ <span>Sentinel</span></div>
-        <div className="brand-sub">Security Digital Twin</div>
+        <div className="brand-sub">Security Console</div>
 
         <div className="side-label">Reports</div>
         <div
@@ -740,7 +740,7 @@ export default function Home() {
           </div>
         )}
 
-        {/* Attack-surface graph + what-if simulation — the Digital Twin core */}
+        {/* Attack-surface graph + what-if simulation — the core reasoning engine */}
         {graphError && (
           <div className="panel">
             <div className="panel-head">🕸️ Attack Surface</div>
