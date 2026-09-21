@@ -214,6 +214,16 @@ html, body { margin: 0; padding: 0; color: var(--text);
   border-radius: 5px; padding: 1px 6px; }
 .run-tag.test { background: rgba(245,158,11,.16); color: #b45309; }
 .run-tag.demo { background: rgba(59,130,246,.16); color: #1d4ed8; }
+.mod-badge { margin-right: 7px; font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px;
+  border-radius: 5px; padding: 2px 7px; border: 1px solid transparent; }
+.mod-badge.mod-ai { background: rgba(8,145,201,.14); color: var(--mint-2); border-color: rgba(8,145,201,.3); }
+.mod-badge.mod-web { background: rgba(59,130,246,.14); color: #1d4ed8; border-color: rgba(59,130,246,.3); }
+.mod-badge.mod-upload { background: rgba(100,116,139,.14); color: #475569; border-color: rgba(100,116,139,.3); }
+.score-pill { display: inline-block; min-width: 26px; text-align: center; margin-right: 8px; font-weight: 800;
+  font-size: 11px; border-radius: 6px; padding: 1px 6px; }
+.score-pill.ok { background: rgba(16,185,129,.16); color: #047857; }
+.score-pill.warn { background: rgba(245,158,11,.16); color: #b45309; }
+.score-pill.bad { background: rgba(220,38,38,.14); color: #dc2626; }
 .run-actions { display: flex; gap: 1px; opacity: 0; transition: opacity .12s; }
 .run-item:hover .run-actions { opacity: 1; }
 .run-actions button { background: none; border: none; color: var(--muted); cursor: pointer;

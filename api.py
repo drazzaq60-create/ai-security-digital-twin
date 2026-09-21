@@ -32,6 +32,8 @@ import cache
 import guardrails
 from web_graph import build_web_graph, simulate_cut
 from live_scan import run_web_scan
+from store import get_store, new_id
+import scoring
 from report_export import build_pdf
 from llm import call_llm, FAST_MODELS, GEMINI_MODELS
 
@@ -283,6 +285,8 @@ class RunBody(BaseModel):
     correlation: Optional[dict] = None
     graph: Optional[dict] = None
     exec_summary: str = ""
+    module: str = "upload"          # ai | web | upload — which scan produced this
+    target: str = ""               # the scanned target/URL/host or uploaded file names
 
 
 @app.post("/export-report")
@@ -298,8 +302,14 @@ def _build_meta(data):
     reports = data.get("reports", []) or []
     graph = data.get("graph") or {}
     assumed = any(e.get("assumed") for e in (graph.get("edges") or []))
+    all_findings = [f for r in reports for f in (r.get("findings") or [])]
+    sc = scoring.score_findings(all_findings, graph)
     return {
         "created": time.time(),
+        "module": data.get("module", "upload"),
+        "target": data.get("target", ""),
+        "score": sc["score"],
+        "band": sc["band"],
         "model": "Gemini (per-call fallback across the flash family)",
         "model_chain": GEMINI_MODELS,
         "app_version": APP_VERSION,
@@ -319,50 +329,53 @@ def _build_meta(data):
     }
 
 
+def _summary_score(d):
+    """Score for a saved scan - prefer the stored value, else compute (legacy runs)."""
+    meta = d.get("meta") or {}
+    if isinstance(meta.get("score"), int):
+        return meta["score"], meta.get("band", scoring.band(meta["score"]))
+    all_findings = [f for r in (d.get("reports") or []) for f in (r.get("findings") or [])]
+    sc = scoring.score_findings(all_findings, d.get("graph"))
+    return sc["score"], sc["band"]
+
+
 @app.post("/runs")
 def save_run(body: RunBody):
-    """Persist one analysis (with provenance) so it can be reloaded later."""
-    rid = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    """Persist one scan (with provenance + score) so it can be reloaded later."""
     data = body.model_dump()
-    data["_id"], data["_created"] = rid, time.time()
+    data["_id"], data["_created"] = new_id(), time.time()
     data["meta"] = _build_meta(data)
-    with open(os.path.join(RUNS_DIR, rid + ".json"), "w", encoding="utf-8") as f:
-        json.dump(data, f)
-    return {"id": rid, "meta": data["meta"]}
+    data["score"] = data["meta"]["score"]  # top-level for quick access
+    sid = get_store().save(data)
+    return {"id": sid, "meta": data["meta"]}
 
 
 @app.get("/runs")
 def list_runs():
-    """List saved analyses (newest first) with a short summary each."""
+    """List saved scans (newest first) with a short summary each - incl. module + score."""
     out = []
-    for fn in sorted(os.listdir(RUNS_DIR), reverse=True):
-        if not fn.endswith(".json"):
-            continue
-        try:
-            with open(os.path.join(RUNS_DIR, fn), encoding="utf-8") as f:
-                d = json.load(f)
-        except Exception:
-            continue
+    for d in get_store().list(limit=100):
         reports = d.get("reports", []) or []
+        score, band = _summary_score(d)
+        meta = d.get("meta") or {}
         out.append({
-            "id": d.get("_id", fn[:-5]), "created": d.get("_created"),
+            "id": d.get("_id"), "created": d.get("_created"),
             "label": d.get("label"), "tag": d.get("tag"),
+            "module": meta.get("module", d.get("module", "upload")),
+            "target": meta.get("target", d.get("target", "")),
+            "score": score, "band": band,
             "reports": len(reports),
             "findings": sum(len(r.get("findings", []) or []) for r in reports),
             "names": [r.get("name") for r in reports][:4],
         })
-    return {"runs": out[:100]}
+    return {"runs": out}
 
 
 @app.get("/runs/{run_id}")
 def get_run(run_id: str):
-    """Load one saved analysis by id."""
-    safe = os.path.basename(run_id)  # prevent path traversal
-    p = os.path.join(RUNS_DIR, safe + ".json")
-    if not os.path.exists(p):
-        return {"error": "not found"}
-    with open(p, encoding="utf-8") as f:
-        return json.load(f)
+    """Load one saved scan by id."""
+    d = get_store().get(run_id)
+    return d if d is not None else {"error": "not found"}
 
 
 class RunUpdate(BaseModel):
@@ -372,30 +385,18 @@ class RunUpdate(BaseModel):
 
 @app.post("/runs/{run_id}/update")
 def update_run(run_id: str, body: RunUpdate):
-    """Rename (label) or tag a saved run."""
-    safe = os.path.basename(run_id)
-    p = os.path.join(RUNS_DIR, safe + ".json")
-    if not os.path.exists(p):
-        return {"error": "not found"}
-    with open(p, encoding="utf-8") as f:
-        d = json.load(f)
+    """Rename (label) or tag a saved scan."""
+    fields = {}
     if body.label is not None:
-        d["label"] = body.label[:80]
+        fields["label"] = body.label[:80]
     if body.tag is not None:
-        d["tag"] = body.tag[:24]
-    with open(p, "w", encoding="utf-8") as f:
-        json.dump(d, f)
-    return {"ok": True}
+        fields["tag"] = body.tag[:24]
+    ok = get_store().update(run_id, fields)
+    return {"ok": True} if ok else {"error": "not found"}
 
 
 @app.delete("/runs/{run_id}")
 def delete_run(run_id: str):
-    """Delete a saved run."""
-    safe = os.path.basename(run_id)
-    p = os.path.join(RUNS_DIR, safe + ".json")
-    if os.path.exists(p):
-        try:
-            os.remove(p)
-        except Exception as e:
-            return {"error": str(e)}
+    """Delete a saved scan."""
+    get_store().delete(run_id)
     return {"ok": True}

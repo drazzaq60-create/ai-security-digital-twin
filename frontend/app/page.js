@@ -295,7 +295,8 @@ export default function Home() {
 
   // Shared downstream: correlation (2+ reports) -> attack graph -> auto-save -> Overview.
   // Reused by analyze() (uploads) and runScan() (live scan) so both paths behave identically.
-  async function finishPipeline(collected, signal) {
+  // `module` (upload|web|ai) + `target` tag the saved scan so History/dashboard can group them.
+  async function finishPipeline(collected, signal, module = "upload", target = "") {
     const allFindings = collected.flatMap((r) => r.findings || []);
     let corrOut = null, graphOut = null;
 
@@ -350,7 +351,7 @@ export default function Home() {
     try {
       const sRes = await fetch(`${API_URL}/runs`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reports: collected, correlation: corrOut, graph: graphOut }),
+        body: JSON.stringify({ reports: collected, correlation: corrOut, graph: graphOut, module, target }),
       });
       if (sRes.ok) { const sd = await sRes.json(); setRunMeta(sd.meta || null); }
       loadRuns();
@@ -406,7 +407,7 @@ export default function Home() {
       }
 
       if (ac.signal.aborted) { logLine("Scan cancelled.", "err"); return; }
-      await finishPipeline([rep], ac.signal);
+      await finishPipeline([rep], ac.signal, "web", target);
     } catch (e) {
       const m = errMsg(e);
       if (m !== "cancelled") setError(`${m} — is the backend running on :8000?`);
@@ -513,7 +514,7 @@ export default function Home() {
         return;
       }
 
-      await finishPipeline(collected, ac.signal);
+      await finishPipeline(collected, ac.signal, "upload", files.map((f) => f.name).join(", "));
     } catch (e) {
       const m = errMsg(e);
       if (m !== "cancelled") setError(`${m} — is the backend running on :8000?`);
@@ -1211,10 +1212,14 @@ export default function Home() {
                   <div key={r.id} className="run-item">
                     <div className="run-open" onClick={() => loadRun(r.id)} title={r.id}>
                       <span className="run-names">
-                        {r.label || (r.names || []).join(", ") || "—"}
+                        <span className={`mod-badge mod-${r.module || "upload"}`}>{MODULE_LABEL[r.module] || "Upload"}</span>
+                        {r.label || r.target || (r.names || []).join(", ") || "—"}
                         {r.tag && <span className={`run-tag ${r.tag}`}>{r.tag}</span>}
                       </span>
-                      <span className="run-meta">{r.reports} report(s) · {r.findings} findings</span>
+                      <span className="run-meta">
+                        {typeof r.score === "number" && <span className={`score-pill ${scoreTone(r.score)}`}>{r.score}</span>}
+                        {r.reports} report(s) · {r.findings} findings
+                      </span>
                     </div>
                     <div className="run-actions">
                       <button title="Rename" onClick={() => renameRun(r)}>✎</button>
@@ -1235,6 +1240,9 @@ export default function Home() {
 
 const SEV_ORDER = ["Critical", "High", "Medium", "Low", "Info", "Unknown"];
 const SEV_COLOR = { Critical: "#ef4444", High: "#f87171", Medium: "#eab308", Low: "#3b82f6", Info: "#38bdf8", Unknown: "#8592a3" };
+
+const MODULE_LABEL = { ai: "AI Red-Team", web: "Web Scan", upload: "Upload" };
+function scoreTone(s) { return s >= 80 ? "ok" : s >= 40 ? "warn" : "bad"; }
 
 function Bars({ rows, colorFor }) {
   const max = Math.max(1, ...rows.map((r) => r.value));
