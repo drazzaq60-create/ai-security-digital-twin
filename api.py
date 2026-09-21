@@ -323,7 +323,9 @@ def _exec_summary(reports, correlation, graph):
         "topology was supplied; never claim exploitation, breach, or compromise. Keep it under ~200 words."
     )
     user = "ANALYSIS (JSON):\n" + json.dumps(ctx, indent=2)
-    return call_llm(system, user)
+    # FAST_MODELS = lite-first: quicker and far less rate-limited than the heavy models,
+    # so the summary returns promptly instead of hanging on a throttled model's retries.
+    return call_llm(system, user, models=FAST_MODELS)
 
 
 @app.post("/exec-summary")

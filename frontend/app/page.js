@@ -220,7 +220,7 @@ export default function Home() {
   const [backendUp, setBackendUp] = useState(null);  // null=unknown, true/false
   const [nav, setNav] = useState("dashboard");
   const [railOpen, setRailOpen] = useState(true);
-  const [scanMode, setScanMode] = useState("manual");  // manual (report upload) | auto (live scan)
+  const [scanMode, setScanMode] = useState(null);  // null (launcher) | manual (upload) | auto (web) | ai
   const [scanTarget, setScanTarget] = useState("");
   const [scanPorts, setScanPorts] = useState(true);
   const [scanAuthorized, setScanAuthorized] = useState(false);
@@ -245,21 +245,33 @@ export default function Home() {
   const [cmpResult, setCmpResult] = useState(null);
   const [execSummary, setExecSummary] = useState("");
   const [execLoading, setExecLoading] = useState(false);
+  const [toasts, setToasts] = useState([]);
+  function toast(msg, kind = "info") {
+    const id = Date.now() + Math.random();
+    setToasts((t) => [...t, { id, msg, kind }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200);
+  }
 
   async function generateSummary() {
     if (reports.length === 0) return;
     setExecLoading(true);
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(new DOMException("timeout", "TimeoutError")), 60000);
     try {
       const r = await fetch(`${API_URL}/exec-summary`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reports, correlation, graph }),
+        body: JSON.stringify({ reports, correlation, graph }), signal: ctrl.signal,
       });
       if (!r.ok) throw new Error(`summary failed (${r.status})`);
       const d = await r.json();
-      setExecSummary(d.summary || "");
+      if (!d.summary) throw new Error("the model returned nothing");
+      setExecSummary(d.summary);
     } catch (e) {
-      setExecSummary(`Could not generate summary: ${(e && e.message) || "error"}`);
+      const m = e?.name === "TimeoutError" ? "the model is busy (timed out after 60s) — try again" : (e?.message || "error");
+      setExecSummary(`Could not generate summary: ${m}.`);
+      toast(`Summary failed: ${m}`, "err");
     } finally {
+      clearTimeout(to);
       setExecLoading(false);
     }
   }
@@ -786,7 +798,6 @@ export default function Home() {
             </button>
           );
         })}
-        <div className="rail-foot">Sentinel Security</div>
       </nav>
 
       <main className="workspace">
@@ -802,13 +813,32 @@ export default function Home() {
         <Dashboard runs={runs} onOpen={loadRun} onNew={() => setNav("scan")} />
       )}
 
-      {nav === "scan" && (
+      {nav === "scan" && !scanMode && (
+      <div className="launcher">
+        <button className="launch-card v" onClick={() => setScanMode("ai")}>
+          <div className="launch-ic">🤖</div>
+          <div className="launch-title">AI / LLM Red-Team</div>
+          <div className="launch-desc">Point an autonomous agent at a chatbot's system prompt or a live API. It crafts adaptive attacks and an LLM-judge scores each hit.</div>
+          <div className="launch-go">Launch red-team →</div>
+        </button>
+        <button className="launch-card b" onClick={() => setScanMode("auto")}>
+          <div className="launch-ic">📡</div>
+          <div className="launch-title">Web App Scan</div>
+          <div className="launch-desc">Point at an authorized URL for a safe, non-intrusive check: TLS/cert, HTTP security headers, and common-port exposure.</div>
+          <div className="launch-go">Launch scan →</div>
+        </button>
+        <button className="launch-card" onClick={() => setScanMode("manual")}>
+          <div className="launch-ic">📄</div>
+          <div className="launch-title">Report Upload</div>
+          <div className="launch-desc">Ingest real scanner output — Nmap, Nessus/OpenVAS, ZAP, Wazuh, SSL — parsed deterministically, then analyzed.</div>
+          <div className="launch-go">Upload reports →</div>
+        </button>
+      </div>
+      )}
+
+      {nav === "scan" && scanMode && (
       <div className="scanview">
-        <div className="scan-modes">
-          <button className={`smode ${scanMode === "manual" ? "active" : ""}`} onClick={() => setScanMode("manual")}>📄 Manual — report upload</button>
-          <button className={`smode ${scanMode === "auto" ? "active" : ""}`} onClick={() => setScanMode("auto")}>📡 Web — live scan</button>
-          <button className={`smode ${scanMode === "ai" ? "active" : ""}`} onClick={() => setScanMode("ai")}>🤖 AI — LLM red-team</button>
-        </div>
+        <button className="back-link" onClick={() => { if (!running) { setScanMode(null); setError(""); } }}>← All scan types</button>
         {scanMode === "manual" ? (
         <div className="scan-grid">
         <aside className="sidebar">
@@ -1464,6 +1494,9 @@ export default function Home() {
         )}
         </div>
       </main>
+      <div className="toasts">
+        {toasts.map((t) => <div key={t.id} className={`toast ${t.kind}`}>{t.msg}</div>)}
+      </div>
     </div>
   );
 }
@@ -1540,10 +1573,11 @@ function Donut({ data }) {
   );
 }
 
-function RiskGauge({ score }) {
+// Security score gauge — higher = better (0-100), matching the platform-wide score.
+function ScoreGauge({ score }) {
   const pct = Math.max(0, Math.min(100, Math.round(score)));
-  const band = pct >= 75 ? "Critical" : pct >= 50 ? "High" : pct >= 25 ? "Medium" : "Low";
-  const color = pct >= 75 ? "#dc2626" : pct >= 50 ? "#ea580c" : pct >= 25 ? "#b45309" : "#16a34a";
+  const band = pct >= 80 ? "Low risk" : pct >= 60 ? "Moderate" : pct >= 40 ? "Elevated" : pct >= 20 ? "High" : "Critical";
+  const color = pct >= 80 ? "#34d399" : pct >= 40 ? "#fbbf24" : "#f87171";
   const cx = 80, cy = 78, R = 60;
   const d = `M ${cx - R} ${cy} A ${R} ${R} 0 0 1 ${cx + R} ${cy}`;
   return (
@@ -1551,9 +1585,19 @@ function RiskGauge({ score }) {
       <path d={d} fill="none" stroke="var(--border)" strokeWidth="13" strokeLinecap="round" pathLength="100" />
       <path d={d} fill="none" stroke={color} strokeWidth="13" strokeLinecap="round" pathLength="100" strokeDasharray={`${pct} 100`} />
       <text x={cx} y={cy - 12} textAnchor="middle" style={{ fontSize: 30, fontWeight: 800, fill: color, fontFamily: "ui-monospace, monospace" }}>{pct}</text>
-      <text x={cx} y={cy + 4} textAnchor="middle" style={{ fontSize: 10.5, fill: "var(--muted)", letterSpacing: "1px" }}>{band.toUpperCase()} RISK</text>
+      <text x={cx} y={cy + 4} textAnchor="middle" style={{ fontSize: 10, fill: "var(--muted)", letterSpacing: "1px" }}>{band.toUpperCase()}</text>
     </svg>
   );
+}
+
+// One shared security score (0-100, higher = better). Mirrors backend scoring.py so the
+// number is identical on the Dashboard, Overview, and History.
+function securityScore(findings, graph) {
+  const COST = { critical: 50, high: 25, medium: 10, low: 3, info: 0, none: 0, unknown: 6 };
+  let raw = 0;
+  (findings || []).forEach((f) => { raw += COST[String(f.severity || "unknown").toLowerCase()] ?? 6; });
+  raw += Math.min(20, ((graph?.reachable_critical || []).length) * 8);
+  return Math.max(0, 100 - Math.min(100, raw));
 }
 
 function OverviewCharts({ reports, graph }) {
@@ -1565,19 +1609,19 @@ function OverviewCharts({ reports, graph }) {
   const paths = graph?.paths || [];
   const topPri = paths.length ? paths[0].priority : 0;
   const donutData = SEV_ORDER.filter((s) => sev[s] > 0).map((s) => ({ label: s, value: sev[s], color: SEV_COLOR[s] }));
-  const score = Math.min(100, sev.Critical * 20 + sev.High * 12 + sev.Medium * 6 + sev.Low * 2 + paths.length * 10);
+  const score = securityScore(findings, graph);
 
   return (
     <div className="panel">
       <div className="panel-head hist-head">
-        <span>📊 Dashboard</span>
+        <span>📊 This scan</span>
         <button className="linklike" onClick={() => setOpen((o) => !o)}>{open ? "Hide ▲" : "Show ▼"}</button>
       </div>
       {open && (
       <div className="dash">
         <div className="dash-card center">
-          <div className="dash-title">Overall risk</div>
-          <RiskGauge score={score} />
+          <div className="dash-title">Security score</div>
+          <ScoreGauge score={score} />
         </div>
         <div className="dash-card">
           <div className="dash-title">Findings by severity</div>
@@ -1649,6 +1693,13 @@ function Dashboard({ runs, onOpen, onNew }) {
   ];
   return (
     <div className="dashboard">
+      <div className="dash-cta">
+        <div>
+          <div className="dash-cta-t">Run a new security scan</div>
+          <div className="dash-cta-s">AI/LLM red-team · web app scan · report upload — all in one place.</div>
+        </div>
+        <button className="run" style={{ margin: 0, width: "auto", padding: "12px 22px" }} onClick={onNew}>＋ New Scan</button>
+      </div>
       <div className="stat-row">
         <Stat n={runs.length} label="Total scans" />
         <Stat n={avgScore} label="Avg score" tone={avgScore >= 80 ? "ok" : avgScore < 40 ? "danger" : ""} />
