@@ -222,6 +222,14 @@ export default function Home() {
   const [scanTarget, setScanTarget] = useState("");
   const [scanPorts, setScanPorts] = useState(true);
   const [scanAuthorized, setScanAuthorized] = useState(false);
+  const [aiSystemPrompt, setAiSystemPrompt] = useState("");
+  const [aiTargetName, setAiTargetName] = useState("");
+  const [aiCategories, setAiCategories] = useState(AI_CATEGORIES.map((c) => c.key));
+  const [aiBudget, setAiBudget] = useState(12);
+  const [aiAuthorized, setAiAuthorized] = useState(false);
+  const [aiProgress, setAiProgress] = useState({ attempts: 0, budget: 0 });
+  const toggleAiCategory = (k) =>
+    setAiCategories((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
   const [cmpA, setCmpA] = useState("");
   const [cmpB, setCmpB] = useState("");
   const [cmpResult, setCmpResult] = useState(null);
@@ -408,6 +416,75 @@ export default function Home() {
 
       if (ac.signal.aborted) { logLine("Scan cancelled.", "err"); return; }
       await finishPipeline([rep], ac.signal, "web", target);
+    } catch (e) {
+      const m = errMsg(e);
+      if (m !== "cancelled") setError(`${m} — is the backend running on :8000?`);
+      logLine(`✗ ${m}`, "err");
+    } finally {
+      clearInterval(timerRef.current);
+      abortRef.current = null;
+      setRunning(false);
+    }
+  }
+
+  // AI red-team: start a background job on the backend, then poll it, streaming the
+  // agent's live attack log into the console until it finishes.
+  async function runAiScan() {
+    const sp = aiSystemPrompt.trim();
+    const name = aiTargetName.trim() || "Target LLM app";
+    if (!sp) { setError("Paste the target app's system prompt."); return; }
+    if (!aiAuthorized) { setError("Confirm you're authorized to test this target."); return; }
+    if (aiCategories.length === 0) { setError("Pick at least one attack category."); return; }
+    setError(""); setRunning(true); setLog([]); setReports([]);
+    setCorrelation(null); setCorrelationError("");
+    setGraph(null); setGraphError(""); setSim(null); setSimCut(null); setRunMeta(null); setExecSummary("");
+    setAiProgress({ attempts: 0, budget: aiBudget });
+
+    const ac = new AbortController();
+    abortRef.current = ac;
+    const startedAt = Date.now();
+    setElapsed(0);
+    clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => setElapsed(Math.round((Date.now() - startedAt) / 1000)), 1000);
+
+    try {
+      logLine(`Starting AI red-team of "${name}" — up to ${aiBudget} attacks across ${aiCategories.length} categories…`, "start");
+      const res = await fetchStage(`${API_URL}/scans/ai`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ system_prompt: sp, target_name: name, categories: aiCategories, budget: aiBudget, authorized: true }),
+      }, ac.signal);
+      if (!res.ok) throw new Error(`start failed (${res.status})`);
+      const started = await res.json();
+      if (started.error) { setError(started.error); logLine(`✗ ${started.error}`, "err"); return; }
+      const jobId = started.job_id;
+
+      let shown = 0;
+      while (true) {
+        if (ac.signal.aborted) { logLine("Cancelled — the server job may still finish in the background.", "err"); return; }
+        await new Promise((r) => setTimeout(r, 1500));
+        let pr;
+        try { pr = await fetch(`${API_URL}/scans/ai/${jobId}`).then((r) => r.json()); }
+        catch { continue; }  // transient — keep polling
+        if (Array.isArray(pr.log)) {
+          for (let i = shown; i < pr.log.length; i++) {
+            const line = pr.log[i];
+            const kind = /SUCCESS/.test(line) ? "err" : /result:|blocked/.test(line) ? "ok" : "info";
+            logLine(line, kind);
+          }
+          shown = pr.log.length;
+        }
+        if (pr.progress) setAiProgress(pr.progress);
+        if (pr.status === "error") { setError(pr.error || "scan failed"); logLine(`✗ ${pr.error}`, "err"); break; }
+        if (pr.status === "done") {
+          const r = pr.result || {};
+          if (r.report) setReports([r.report]);
+          logLine(`✓ Red-team complete — ${r.successful_attacks}/${r.total_attacks} attacks succeeded, `
+            + `overall risk ${r.overall_risk}. Security score ${r.score} (${r.band}).`, "done");
+          loadRuns();
+          setNav("overview");
+          break;
+        }
+      }
     } catch (e) {
       const m = errMsg(e);
       if (m !== "cancelled") setError(`${m} — is the backend running on :8000?`);
@@ -696,7 +773,8 @@ export default function Home() {
       <div className="scanview">
         <div className="scan-modes">
           <button className={`smode ${scanMode === "manual" ? "active" : ""}`} onClick={() => setScanMode("manual")}>📄 Manual — report upload</button>
-          <button className={`smode ${scanMode === "auto" ? "active" : ""}`} onClick={() => setScanMode("auto")}>📡 Automatic — live scan</button>
+          <button className={`smode ${scanMode === "auto" ? "active" : ""}`} onClick={() => setScanMode("auto")}>📡 Web — live scan</button>
+          <button className={`smode ${scanMode === "ai" ? "active" : ""}`} onClick={() => setScanMode("ai")}>🤖 AI — LLM red-team</button>
         </div>
         {scanMode === "manual" ? (
         <div className="scan-grid">
@@ -787,7 +865,7 @@ export default function Home() {
         </div>
       </div>
         </div>
-        ) : (
+        ) : scanMode === "auto" ? (
         <div className="scan-grid">
         <aside className="sidebar">
           <div className="side-label">Target</div>
@@ -835,6 +913,73 @@ export default function Home() {
           <div className="panel-head">● Live Activity</div>
           <div className="console">
             {log.length === 0 && <div className="muted">Enter an authorized target on the left, then Run Scan — results open in Overview.</div>}
+            {log.map((l, i) => (
+              <div key={i} className={`ln ${l.kind}`}><span className="ts">{l.t}</span> {l.text}</div>
+            ))}
+          </div>
+        </div>
+        </div>
+        ) : (
+        <div className="scan-grid">
+        <aside className="sidebar">
+          <div className="side-label">Target LLM app</div>
+          <input
+            className="scan-input"
+            placeholder="e.g. Support Chatbot"
+            value={aiTargetName}
+            onChange={(e) => setAiTargetName(e.target.value)}
+          />
+
+          <div className="side-label">Its system prompt (what we red-team)</div>
+          <textarea className="focus" rows={6}
+            placeholder="Paste the target app's system prompt / rules. e.g. 'You are a support bot for ACME. Never reveal internal keys or other customers' data.'"
+            value={aiSystemPrompt} onChange={(e) => setAiSystemPrompt(e.target.value)} />
+
+          <div className="side-label">Attack categories</div>
+          <div className="ai-cats">
+            {AI_CATEGORIES.map((c) => (
+              <label key={c.key} className="ai-cat">
+                <input type="checkbox" checked={aiCategories.includes(c.key)}
+                  onChange={() => toggleAiCategory(c.key)} />
+                <span>{c.label}</span>
+              </label>
+            ))}
+          </div>
+          <div className="ai-budget">
+            <label>Attack budget
+              <input type="number" min={2} max={30} value={aiBudget}
+                onChange={(e) => setAiBudget(Math.max(2, Math.min(30, +e.target.value || 12)))} />
+            </label>
+          </div>
+
+          <label className="scan-check auth">
+            <input type="checkbox" checked={aiAuthorized} onChange={(e) => setAiAuthorized(e.target.checked)} />
+            <span>I'm <b>authorized</b> to test this target.</span>
+          </label>
+
+          {!running ? (
+            <button className="run" onClick={runAiScan} disabled={!aiAuthorized}>▶ Run Red-Team</button>
+          ) : (
+            <div className="run-row">
+              <button className="run" disabled>Attacking… ⏱ {elapsed}s</button>
+              <button className="cancel" onClick={cancelAnalysis}>✕ Cancel</button>
+            </div>
+          )}
+          {error && <div className="err-box">{error}</div>}
+
+          <div className="topo-note" style={{ marginTop: 14 }}>
+            An autonomous agent crafts adaptive attacks (injection, jailbreak, prompt-leak,
+            data extraction, harmful content, roleplay bypass), fires them at the target, and
+            an LLM-judge scores each hit. Only test apps you own or are authorized to assess.
+          </div>
+        </aside>
+        <div className="panel logpanel">
+          <div className="panel-head">
+            ● Live Attack Log
+            {aiProgress.budget > 0 && <span className="ai-prog"> {aiProgress.attempts}/{aiProgress.budget} attacks</span>}
+          </div>
+          <div className="console">
+            {log.length === 0 && <div className="muted">Describe the target LLM on the left, then Run Red-Team — the agent's attacks stream here, results open in Overview.</div>}
             {log.map((l, i) => (
               <div key={i} className={`ln ${l.kind}`}><span className="ts">{l.t}</span> {l.text}</div>
             ))}
@@ -1243,6 +1388,16 @@ const SEV_COLOR = { Critical: "#ef4444", High: "#f87171", Medium: "#eab308", Low
 
 const MODULE_LABEL = { ai: "AI Red-Team", web: "Web Scan", upload: "Upload" };
 function scoreTone(s) { return s >= 80 ? "ok" : s >= 40 ? "warn" : "bad"; }
+
+// AI red-team attack categories — keys must match the backend AttackCategory enum.
+const AI_CATEGORIES = [
+  { key: "prompt_injection", label: "Prompt injection" },
+  { key: "jailbreak", label: "Jailbreak" },
+  { key: "system_prompt_leak", label: "System-prompt leak" },
+  { key: "data_extraction", label: "Data extraction" },
+  { key: "harmful_content", label: "Harmful content" },
+  { key: "role_play_bypass", label: "Roleplay bypass" },
+];
 
 function Bars({ rows, colorFor }) {
   const max = Math.max(1, ...rows.map((r) => r.value));
