@@ -396,12 +396,17 @@ def list_runs():
         reports = d.get("reports", []) or []
         score, band = _summary_score(d)
         meta = d.get("meta") or {}
+        sev = {}
+        for r in reports:
+            for f in (r.get("findings") or []):
+                k = str(f.get("severity", "Unknown")).title()
+                sev[k] = sev.get(k, 0) + 1
         out.append({
             "id": d.get("_id"), "created": d.get("_created"),
             "label": d.get("label"), "tag": d.get("tag"),
             "module": meta.get("module", d.get("module", "upload")),
             "target": meta.get("target", d.get("target", "")),
-            "score": score, "band": band,
+            "score": score, "band": band, "severity": sev,
             "reports": len(reports),
             "findings": sum(len(r.get("findings", []) or []) for r in reports),
             "names": [r.get("name") for r in reports][:4],

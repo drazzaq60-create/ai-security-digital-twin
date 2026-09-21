@@ -16,6 +16,7 @@ const TOPOLOGY_TEMPLATE = {
 const TEMPLATE_TEXT = JSON.stringify(TOPOLOGY_TEMPLATE, null, 2);
 
 const RAIL = [
+  { id: "dashboard", label: "Dashboard" },
   { id: "scan", label: "Scan" },
   { id: "overview", label: "Overview" },
   { id: "paths", label: "Attack Paths" },
@@ -26,7 +27,7 @@ const RAIL = [
   { id: "history", label: "History" },
 ];
 const VIEW_TITLES = {
-  scan: "New Scan", overview: "Overview", paths: "Attack Paths",
+  dashboard: "Dashboard", scan: "New Scan", overview: "Overview", paths: "Attack Paths",
   findings: "Findings & Correlation", mitre: "MITRE ATT&CK Mapping",
   summary: "Executive Summary", compare: "Compare Analyses", history: "Saved Analyses",
 };
@@ -34,6 +35,7 @@ const VIEW_TITLES = {
 function RailIcon({ name }) {
   const p = { fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round" };
   const paths = {
+    dashboard: <><path d="M3 13a8 8 0 0 1 16 0" {...p} /><path d="M11 13l4-3" {...p} /><circle cx="11" cy="13" r="1.3" {...p} /></>,
     scan: <><circle cx="11" cy="11" r="7" {...p} /><path d="M11 4v7l4.5 4.5" {...p} /></>,
     overview: <><rect x="3" y="3" width="7" height="7" rx="1.5" {...p} /><rect x="12" y="3" width="7" height="7" rx="1.5" {...p} /><rect x="3" y="12" width="7" height="7" rx="1.5" {...p} /><rect x="12" y="12" width="7" height="7" rx="1.5" {...p} /></>,
     paths: <><circle cx="4" cy="11" r="2.2" {...p} /><circle cx="18" cy="5" r="2.2" {...p} /><circle cx="18" cy="17" r="2.2" {...p} /><path d="M6 10 16 6M6 12l10 4" {...p} /></>,
@@ -216,7 +218,7 @@ export default function Home() {
   }
 
   const [backendUp, setBackendUp] = useState(null);  // null=unknown, true/false
-  const [nav, setNav] = useState("scan");
+  const [nav, setNav] = useState("dashboard");
   const [railOpen, setRailOpen] = useState(true);
   const [scanMode, setScanMode] = useState("manual");  // manual (report upload) | auto (live scan)
   const [scanTarget, setScanTarget] = useState("");
@@ -745,7 +747,7 @@ export default function Home() {
           </div>
         </div>
         {RAIL.map((it) => {
-          const enabled = it.id === "scan" || it.id === "history"
+          const enabled = it.id === "dashboard" || it.id === "scan" || it.id === "history"
             || (it.id === "compare" ? runs.length >= 2 : reports.length > 0);
           return (
             <button key={it.id} disabled={!enabled}
@@ -768,6 +770,10 @@ export default function Home() {
           </div>
         </header>
         <div className={`ws-body ${nav === "scan" ? "scan" : ""}`}>
+
+      {nav === "dashboard" && (
+        <Dashboard runs={runs} onOpen={loadRun} onNew={() => setNav("scan")} />
+      )}
 
       {nav === "scan" && (
       <div className="scanview">
@@ -1519,6 +1525,82 @@ function Stat({ n, label, tone }) {
     <div className={`stat ${tone || ""}`}>
       <div className="stat-n">{n}</div>
       <div className="stat-l">{label}</div>
+    </div>
+  );
+}
+
+function scoreColor(s) { return s >= 80 ? "#16a34a" : s >= 40 ? "#d97706" : "#dc2626"; }
+
+function ScoreTrend({ rows, onOpen }) {
+  if (!rows.length) return <p className="muted">No scans yet.</p>;
+  return (
+    <div className="trend">
+      {rows.map((r) => (
+        <button key={r.id} className="trend-col"
+          title={`${MODULE_LABEL[r.module] || ""} ${r.target || ""} — score ${r.score}`}
+          onClick={() => onOpen(r.id)}>
+          <div className="trend-bar" style={{ height: Math.max(4, r.score || 0) + "%", background: scoreColor(r.score || 0) }} />
+          <span className="trend-x">{r.score}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Dashboard({ runs, onOpen, onNew }) {
+  if (!runs || runs.length === 0) {
+    return <div className="empty">No scans yet. <button className="linklike" onClick={onNew}>Run your first scan →</button></div>;
+  }
+  const byModule = { ai: 0, web: 0, upload: 0 };
+  const sevAll = {};
+  let findingsTotal = 0, scoreSum = 0, scoreCount = 0;
+  runs.forEach((r) => {
+    byModule[r.module] = (byModule[r.module] || 0) + 1;
+    findingsTotal += r.findings || 0;
+    if (typeof r.score === "number") { scoreSum += r.score; scoreCount++; }
+    Object.entries(r.severity || {}).forEach(([k, v]) => { sevAll[k] = (sevAll[k] || 0) + v; });
+  });
+  const avgScore = scoreCount ? Math.round(scoreSum / scoreCount) : 0;
+  const donutData = SEV_ORDER.filter((s) => sevAll[s] > 0).map((s) => ({ label: s, value: sevAll[s], color: SEV_COLOR[s] }));
+  const trend = [...runs].slice(0, 14).reverse();  // oldest -> newest
+  const moduleRows = [
+    { label: "AI Red-Team", value: byModule.ai || 0 },
+    { label: "Web Scan", value: byModule.web || 0 },
+    { label: "Upload", value: byModule.upload || 0 },
+  ];
+  return (
+    <div className="dashboard">
+      <div className="stat-row">
+        <Stat n={runs.length} label="Total scans" />
+        <Stat n={avgScore} label="Avg score" tone={avgScore >= 80 ? "ok" : avgScore < 40 ? "danger" : ""} />
+        <Stat n={findingsTotal} label="Findings" />
+        <Stat n={byModule.ai || 0} label="AI red-teams" />
+      </div>
+      <div className="dash">
+        <div className="dash-card">
+          <div className="dash-title">Security score trend (recent)</div>
+          <ScoreTrend rows={trend} onOpen={onOpen} />
+        </div>
+        <div className="dash-card">
+          <div className="dash-title">Findings by severity (all scans)</div>
+          {donutData.length ? <Donut data={donutData} /> : <p className="muted">No findings yet.</p>}
+        </div>
+        <div className="dash-card">
+          <div className="dash-title">Scans by module</div>
+          <Bars rows={moduleRows}
+            colorFor={(r) => (r.label.includes("AI") ? "#0891c9" : r.label.includes("Web") ? "#2563eb" : "#64748b")} />
+        </div>
+        <div className="dash-card metrics">
+          <div className="dash-title">Recent scans</div>
+          {runs.slice(0, 6).map((r) => (
+            <button key={r.id} className="dash-recent" onClick={() => onOpen(r.id)}>
+              <span className={`mod-badge mod-${r.module || "upload"}`}>{MODULE_LABEL[r.module] || "Upload"}</span>
+              <span className="dash-recent-name">{r.label || r.target || (r.names || []).join(", ") || r.id}</span>
+              {typeof r.score === "number" && <span className={`score-pill ${scoreTone(r.score)}`}>{r.score}</span>}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

@@ -15,6 +15,13 @@ light scan), and the text is parsed, analysed, and summarised, some of it by an 
 Gemini). This document focuses on **prompt injection via uploaded report content**
 (OWASP LLM Top 10 — **LLM01**).
 
+**The AI red-team module (RedCell) — responsible use.** Sentinel also has an *offensive* module
+that autonomously attacks a target LLM. It only ever tests a **system prompt the user supplies**,
+requires an explicit **authorization acknowledgement** before running, and is bounded (a capped
+attack budget). It is intended for testing LLM apps you own or are authorized to assess — the
+same rule as any red-team tool. It does not attack third-party services on its own; the "target"
+is whatever system prompt the operator pastes in.
+
 Out of scope (portfolio project, single-user, no auth): multi-tenant isolation, account
 security, DoS/rate-limiting, and the security of the Gemini API itself.
 
