@@ -146,6 +146,44 @@ async def scan(body: ScanBody):
     }
 
 
+class AIScanBody(BaseModel):
+    system_prompt: str = ""       # the target LLM app's own rules (what we red-team)
+    target_name: str = "Target LLM app"
+    categories: List[str] = []    # empty = all attack categories
+    budget: int = 12              # max total attacks
+    max_per_category: int = 2
+    authorized: bool = False      # user must confirm they own/may test the target
+
+
+@app.post("/scans/ai")
+def start_ai_scan(body: AIScanBody):
+    """Start an autonomous AI/LLM red-team scan (RedCell) as a background job.
+
+    Returns a job id immediately; poll GET /scans/ai/{id} for live progress + result.
+    The scan targets a system prompt the user supplies, so it only ever tests what they
+    provide - but we still require an explicit authorization acknowledgement."""
+    import jobs
+    from ai_scan import run_ai_scan
+    if not body.system_prompt.strip():
+        return {"error": "Provide the target LLM app's system prompt to red-team."}
+    if not body.authorized:
+        return {"error": "Confirm you're authorized to test this target."}
+    budget = max(1, min(body.budget, 30))            # keep runs bounded on the free tier
+    max_per = max(1, min(body.max_per_category, 5))
+    jid = jobs.create("ai", body.target_name)
+    jobs.run_in_thread(run_ai_scan, jid, body.system_prompt, body.target_name,
+                       body.categories, budget, max_per)
+    return {"job_id": jid}
+
+
+@app.get("/scans/ai/{job_id}")
+def ai_scan_status(job_id: str):
+    """Poll an AI red-team job: status (running|done|error), live log, progress, result."""
+    import jobs
+    j = jobs.get(job_id)
+    return j if j is not None else {"error": "not found"}
+
+
 class ReportBody(BaseModel):
     name: str = ""
     findings: List[dict] = []
