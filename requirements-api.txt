@@ -10,4 +10,6 @@ fpdf2
 google-genai
 python-dotenv
 networkx
-langgraph        # RedCell AI red-team agent (Module 1) — state-machine orchestration
+langgraph          # RedCell AI red-team agent (Module 1) — state-machine orchestration
+sqlalchemy         # relational store (Phase 4)
+psycopg2-binary    # Postgres driver for Supabase
