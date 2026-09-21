@@ -147,32 +147,49 @@ async def scan(body: ScanBody):
 
 
 class AIScanBody(BaseModel):
-    system_prompt: str = ""       # the target LLM app's own rules (what we red-team)
+    system_prompt: str = ""       # simulated mode: the target's own rules (what we red-team)
     target_name: str = "Target LLM app"
     categories: List[str] = []    # empty = all attack categories
     budget: int = 12              # max total attacks
     max_per_category: int = 2
     authorized: bool = False      # user must confirm they own/may test the target
+    target_mode: str = "simulated"        # simulated | endpoint
+    endpoint: Optional[dict] = None       # endpoint mode: {url, preset, api_key, model, headers, body_template, response_path}
+    target_rules: str = ""                # endpoint mode: optional description of the bot's rules (for the judge)
 
 
 @app.post("/scans/ai")
 def start_ai_scan(body: AIScanBody):
     """Start an autonomous AI/LLM red-team scan (RedCell) as a background job.
 
-    Returns a job id immediately; poll GET /scans/ai/{id} for live progress + result.
-    The scan targets a system prompt the user supplies, so it only ever tests what they
-    provide - but we still require an explicit authorization acknowledgement."""
+    Two target modes:
+      - simulated: attack a system prompt the user supplies (run on our own model);
+      - endpoint:  black-box attack a LIVE chatbot API URL the user supplies.
+    Returns a job id immediately; poll GET /scans/ai/{id} for live progress + result."""
     import jobs
     from ai_scan import run_ai_scan
-    if not body.system_prompt.strip():
-        return {"error": "Provide the target LLM app's system prompt to red-team."}
     if not body.authorized:
         return {"error": "Confirm you're authorized to test this target."}
-    budget = max(1, min(body.budget, 30))            # keep runs bounded on the free tier
+
+    endpoint = None
+    if body.target_mode == "endpoint":
+        endpoint = body.endpoint or {}
+        if not (endpoint.get("url") or "").strip():
+            return {"error": "Provide the live chatbot API URL to test."}
+        from target_client import guard_url, TargetError
+        try:
+            guard_url(endpoint["url"])                # fail fast on a blocked/invalid URL (SSRF guard)
+        except TargetError as e:
+            return {"error": str(e)}
+    else:
+        if not body.system_prompt.strip():
+            return {"error": "Provide the target LLM app's system prompt to red-team."}
+
+    budget = max(1, min(body.budget, 30))            # keep runs bounded
     max_per = max(1, min(body.max_per_category, 5))
     jid = jobs.create("ai", body.target_name)
     jobs.run_in_thread(run_ai_scan, jid, body.system_prompt, body.target_name,
-                       body.categories, budget, max_per)
+                       body.categories, budget, max_per, endpoint, body.target_rules)
     return {"job_id": jid}
 
 

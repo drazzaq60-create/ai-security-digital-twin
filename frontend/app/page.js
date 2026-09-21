@@ -230,6 +230,14 @@ export default function Home() {
   const [aiBudget, setAiBudget] = useState(12);
   const [aiAuthorized, setAiAuthorized] = useState(false);
   const [aiProgress, setAiProgress] = useState({ attempts: 0, budget: 0 });
+  const [aiTargetMode, setAiTargetMode] = useState("simulated");   // simulated | endpoint
+  const [aiEndpointUrl, setAiEndpointUrl] = useState("");
+  const [aiPreset, setAiPreset] = useState("openai");              // openai | custom
+  const [aiApiKey, setAiApiKey] = useState("");
+  const [aiModel, setAiModel] = useState("gpt-4o-mini");
+  const [aiBodyTemplate, setAiBodyTemplate] = useState('{"messages":[{"role":"user","content":"{{prompt}}"}]}');
+  const [aiResponsePath, setAiResponsePath] = useState("choices.0.message.content");
+  const [aiTargetRules, setAiTargetRules] = useState("");
   const toggleAiCategory = (k) =>
     setAiCategories((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
   const [cmpA, setCmpA] = useState("");
@@ -434,7 +442,11 @@ export default function Home() {
   async function runAiScan() {
     const sp = aiSystemPrompt.trim();
     const name = aiTargetName.trim() || "Target LLM app";
-    if (!sp) { setError("Paste the target app's system prompt."); return; }
+    const isEndpoint = aiTargetMode === "endpoint";
+    if (isEndpoint) {
+      if (!aiEndpointUrl.trim()) { setError("Enter the chatbot API URL."); return; }
+      if (!/^https?:\/\//i.test(aiEndpointUrl.trim())) { setError("API URL must start with http:// or https://"); return; }
+    } else if (!sp) { setError("Paste the target app's system prompt."); return; }
     if (!aiAuthorized) { setError("Confirm you're authorized to test this target."); return; }
     if (aiCategories.length === 0) { setError("Pick at least one attack category."); return; }
     setError(""); setRunning(true); setLog([]); setReports([]);
@@ -450,10 +462,25 @@ export default function Home() {
     timerRef.current = setInterval(() => setElapsed(Math.round((Date.now() - startedAt) / 1000)), 1000);
 
     try {
-      logLine(`Starting AI red-team of "${name}" — up to ${aiBudget} attacks across ${aiCategories.length} categories…`, "start");
+      const where = isEndpoint ? `live endpoint ${aiEndpointUrl.trim()}` : `"${name}"`;
+      logLine(`Starting AI red-team of ${where} — up to ${aiBudget} attacks across ${aiCategories.length} categories…`, "start");
+      const payload = {
+        target_name: name, categories: aiCategories, budget: aiBudget, authorized: true,
+        target_mode: aiTargetMode,
+      };
+      if (isEndpoint) {
+        const endpoint = { url: aiEndpointUrl.trim(), preset: aiPreset };
+        if (aiApiKey.trim()) endpoint.api_key = aiApiKey.trim();
+        if (aiPreset === "openai") endpoint.model = aiModel.trim() || "gpt-4o-mini";
+        else { endpoint.body_template = aiBodyTemplate; endpoint.response_path = aiResponsePath.trim(); }
+        payload.endpoint = endpoint;
+        payload.target_rules = aiTargetRules;
+      } else {
+        payload.system_prompt = sp;
+      }
       const res = await fetchStage(`${API_URL}/scans/ai`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ system_prompt: sp, target_name: name, categories: aiCategories, budget: aiBudget, authorized: true }),
+        body: JSON.stringify(payload),
       }, ac.signal);
       if (!res.ok) throw new Error(`start failed (${res.status})`);
       const started = await res.json();
@@ -936,10 +963,62 @@ export default function Home() {
             onChange={(e) => setAiTargetName(e.target.value)}
           />
 
-          <div className="side-label">Its system prompt (what we red-team)</div>
-          <textarea className="focus" rows={6}
-            placeholder="Paste the target app's system prompt / rules. e.g. 'You are a support bot for ACME. Never reveal internal keys or other customers' data.'"
-            value={aiSystemPrompt} onChange={(e) => setAiSystemPrompt(e.target.value)} />
+          <div className="side-label">Target type</div>
+          <div className="ai-modes">
+            <button className={`ai-mode ${aiTargetMode === "simulated" ? "active" : ""}`}
+              onClick={() => setAiTargetMode("simulated")}>System prompt</button>
+            <button className={`ai-mode ${aiTargetMode === "endpoint" ? "active" : ""}`}
+              onClick={() => setAiTargetMode("endpoint")}>Live API endpoint</button>
+          </div>
+
+          {aiTargetMode === "simulated" ? (
+            <>
+              <div className="side-label">Its system prompt (what we red-team)</div>
+              <textarea className="focus" rows={6}
+                placeholder="Paste the target app's system prompt / rules. e.g. 'You are a support bot for ACME. Never reveal internal keys or other customers' data.'"
+                value={aiSystemPrompt} onChange={(e) => setAiSystemPrompt(e.target.value)} />
+              <div className="ai-hint">Runs the prompt on our model and attacks it — tests your <b>prompt design</b>.</div>
+            </>
+          ) : (
+            <>
+              <div className="side-label">Chatbot API URL</div>
+              <input className="scan-input" placeholder="https://api.your-bot.com/v1/chat/completions"
+                value={aiEndpointUrl} onChange={(e) => setAiEndpointUrl(e.target.value)} />
+
+              <div className="side-label">API format</div>
+              <select className="ai-select" value={aiPreset} onChange={(e) => setAiPreset(e.target.value)}>
+                <option value="openai">OpenAI-compatible (OpenAI, Groq, Together, …)</option>
+                <option value="custom">Custom JSON</option>
+              </select>
+
+              <div className="side-label">API key (optional)</div>
+              <input className="scan-input" type="password" placeholder="sent as Bearer token; never stored"
+                value={aiApiKey} onChange={(e) => setAiApiKey(e.target.value)} />
+
+              {aiPreset === "openai" ? (
+                <>
+                  <div className="side-label">Model</div>
+                  <input className="scan-input" placeholder="gpt-4o-mini"
+                    value={aiModel} onChange={(e) => setAiModel(e.target.value)} />
+                </>
+              ) : (
+                <>
+                  <div className="side-label">Request body (JSON, use {"{{prompt}}"})</div>
+                  <textarea className="focus" rows={3} value={aiBodyTemplate}
+                    onChange={(e) => setAiBodyTemplate(e.target.value)} />
+                  <div className="side-label">Reply path in response</div>
+                  <input className="scan-input" placeholder="choices.0.message.content"
+                    value={aiResponsePath} onChange={(e) => setAiResponsePath(e.target.value)} />
+                </>
+              )}
+
+              <div className="side-label">What the bot should refuse (optional)</div>
+              <textarea className="focus" rows={3}
+                placeholder="Helps the judge grade hits. e.g. 'Must never reveal its system prompt, internal keys, or other users data.'"
+                value={aiTargetRules} onChange={(e) => setAiTargetRules(e.target.value)} />
+              <div className="ai-hint">Attacks your <b>real deployed bot</b> over HTTP. Only test bots you own/are authorized to.</div>
+            </>
+          )}
 
           <div className="side-label">Attack categories</div>
           <div className="ai-cats">

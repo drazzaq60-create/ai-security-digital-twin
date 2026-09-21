@@ -37,6 +37,7 @@ class RedTeamState(TypedDict, total=False):
     results: List[AttackResult]
     log: List[str]
     report: Optional[RedTeamReport]
+    target_endpoint: Optional[dict]   # live-API config; None = simulate on our own model
 
 
 # ---------- attacker (LLM that crafts adversarial prompts) ----------
@@ -107,7 +108,15 @@ def node_generate(state: RedTeamState) -> dict:
 
 def node_execute(state: RedTeamState) -> dict:
     attempt = state["current_attempt"]
-    response = llm.query_target(state["system_prompt"], attempt.prompt)
+    endpoint = state.get("target_endpoint")
+    if endpoint:  # black-box mode: attack a LIVE chatbot API
+        from target_client import query_endpoint, TargetError
+        try:
+            response = query_endpoint(endpoint, attempt.prompt)
+        except TargetError as e:
+            response = f"[target error: {e}]"
+    else:         # simulated mode: run the target's system prompt on our own model
+        response = llm.query_target(state["system_prompt"], attempt.prompt)
     return {"current_response": response}
 
 
@@ -203,7 +212,8 @@ def build_agent():
 
 def run_redteam(system_prompt: str, target_name: str = "Target",
                 categories: Optional[List[AttackCategory]] = None,
-                budget: int = 12, max_per_category: int = 2) -> RedTeamState:
+                budget: int = 12, max_per_category: int = 2,
+                target_endpoint: Optional[dict] = None) -> RedTeamState:
     agent = build_agent()
     init: RedTeamState = {
         "target_name": target_name,
@@ -211,6 +221,7 @@ def run_redteam(system_prompt: str, target_name: str = "Target",
         "budget": budget,
         "max_per_category": max_per_category,
         "categories": categories or list(ATTACK_LIBRARY.keys()),
+        "target_endpoint": target_endpoint,
         "log": [],
     }
     return agent.invoke(init, config={"recursion_limit": 100})
