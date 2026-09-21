@@ -60,5 +60,10 @@ def normalize_url(url: str) -> str:
 
 def make_engine(url: str):
     """Create an engine. pool_pre_ping avoids stale-connection errors on free tiers that
-    drop idle connections."""
-    return create_engine(normalize_url(url), pool_pre_ping=True, future=True)
+    drop idle connections. Postgres (Supabase) requires SSL, so force it unless the URL
+    already specifies sslmode."""
+    norm = normalize_url(url)
+    connect_args = {}
+    if norm.startswith("postgresql") and "sslmode" not in norm:
+        connect_args["sslmode"] = "require"
+    return create_engine(norm, pool_pre_ping=True, future=True, connect_args=connect_args)
