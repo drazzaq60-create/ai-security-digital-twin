@@ -1,3 +1,13 @@
+---
+title: Sentinel Security
+emoji: 🛡️
+colorFrom: blue
+colorTo: gray
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Sentinel Security
 
 A full-stack security platform that tests **both your web apps and your AI apps**, then uses
