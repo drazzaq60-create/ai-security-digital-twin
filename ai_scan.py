@@ -90,6 +90,7 @@ def run_ai_scan(job_id, system_prompt, target_name, categories, budget, max_per_
         }
 
         report = None
+        results = []
         # stream_mode="updates": each step yields {node_name: {returned keys}}.
         for step in agent.stream(init, config={"recursion_limit": 100}):
             for _node, upd in step.items():
@@ -98,6 +99,8 @@ def run_ai_scan(job_id, system_prompt, target_name, categories, budget, max_per_
                         jobs.set_log(job_id, upd["log"])
                     if "total_attempts" in upd:
                         jobs.set_progress(job_id, attempts=upd["total_attempts"])
+                    if upd.get("results"):                # full cumulative attempt list
+                        results = upd["results"]
                     if upd.get("report") is not None:
                         report = upd["report"]
 
@@ -108,6 +111,19 @@ def run_ai_scan(job_id, system_prompt, target_name, categories, budget, max_per_
         rep = _map_report(report, target_name)
         all_findings = rep["findings"]
         sc = scoring.score_findings(all_findings)
+
+        # Full transcript: EVERY attack the agent sent (blocked + successful), so the user
+        # can read the actual attack -> target response -> judge verdict exchange.
+        transcript = [{
+            "category": r.attempt.category.value,
+            "technique": r.attempt.technique,
+            "prompt": r.attempt.prompt,
+            "response": r.target_response,
+            "success": r.success,
+            "severity": r.severity.value,
+            "reasoning": r.reasoning,
+        } for r in results]
+        rep["scan"]["transcript"] = transcript
 
         mode = "endpoint" if target_endpoint else "simulated"
         safe_endpoint = None

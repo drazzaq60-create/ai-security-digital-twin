@@ -246,6 +246,12 @@ export default function Home() {
   const [execSummary, setExecSummary] = useState("");
   const [execLoading, setExecLoading] = useState(false);
   const [toasts, setToasts] = useState([]);
+  const [gated, setGated] = useState(false);
+  const [codeInput, setCodeInput] = useState("");
+  function submitCode() {
+    try { localStorage.setItem("sentinel_access", codeInput.trim()); } catch { /* ignore */ }
+    setGated(false); loadRuns(); pingHealth();
+  }
   function toast(msg, kind = "info") {
     const id = Date.now() + Math.random();
     setToasts((t) => [...t, { id, msg, kind }]);
@@ -305,6 +311,23 @@ export default function Home() {
       setBackendUp(r.ok);
     } catch { setBackendUp(false); }
   }
+  // Inject the access code (if any) on every API call, and surface the gate on a 401.
+  useEffect(() => {
+    const orig = window.fetch;
+    window.fetch = async (input, init = {}) => {
+      const url = typeof input === "string" ? input : (input?.url || "");
+      if (url.startsWith(API_URL)) {
+        let code = "";
+        try { code = localStorage.getItem("sentinel_access") || ""; } catch { /* ignore */ }
+        if (code) init = { ...init, headers: { ...(init.headers || {}), "X-Access-Code": code } };
+      }
+      const res = await orig(input, init);
+      if (res.status === 401 && url.startsWith(API_URL)) setGated(true);
+      return res;
+    };
+    return () => { window.fetch = orig; };
+  }, []);
+
   useEffect(() => {
     loadRuns(); pingHealth();
     const t = setInterval(pingHealth, 30000);
@@ -842,6 +865,7 @@ export default function Home() {
         {scanMode === "manual" ? (
         <div className="scan-grid">
         <aside className="sidebar">
+        <div className="flow-intro"><b>Report Upload.</b> Already ran a scanner (Nmap, Nessus, ZAP, Wazuh, an SSL check)? Upload its output file and Sentinel parses, correlates, scores and explains the findings.</div>
         <div className="side-label">Reports</div>
         <div
           className={`drop ${dragging ? "drag" : ""}`}
@@ -858,6 +882,7 @@ export default function Home() {
           <div>Drop reports here<br /><span>or click to browse</span></div>
           <input ref={inputRef} type="file" multiple hidden onChange={(e) => addFiles(e.target.files)} />
         </div>
+        <p className="field-hint">Accepts Nmap XML, Nessus/OpenVAS JSON, OWASP ZAP, Wazuh, SSL scans, PDFs, or plain text. Add several at once to correlate across tools.</p>
 
         {files.length > 0 && (
           <div className="file-list">
@@ -906,6 +931,7 @@ export default function Home() {
         <textarea className="focus" rows={3}
           placeholder="e.g. what are the critical findings?"
           value={message} onChange={(e) => setMessage(e.target.value)} />
+        <p className="field-hint">Optional: tell the AI what to prioritise in its fixes (leave blank for a general analysis).</p>
 
         {!running ? (
           <button className="run" onClick={analyze}>▶ Run Analysis</button>
@@ -931,6 +957,7 @@ export default function Home() {
         ) : scanMode === "auto" ? (
         <div className="scan-grid">
         <aside className="sidebar">
+          <div className="flow-intro"><b>Web App Scan.</b> Point it at a website you own. It safely checks the TLS certificate, HTTP security headers, and which common ports are open — no exploitation. Takes a few seconds.</div>
           <div className="side-label">Target</div>
           <input
             className="scan-input"
@@ -939,16 +966,19 @@ export default function Home() {
             onChange={(e) => setScanTarget(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !running) runScan(); }}
           />
+          <p className="field-hint">The domain or URL to check, e.g. <code>mysite.com</code>. Add <code>:port</code> only for a non-standard port.</p>
 
           <label className="scan-check">
             <input type="checkbox" checked={scanPorts} onChange={(e) => setScanPorts(e.target.checked)} />
             <span>Probe common ports (FTP, SSH, RDP, DB, …)</span>
           </label>
+          <p className="field-hint">Tries to connect to ~10 common ports to see what's exposed. Uncheck to only check TLS + headers (faster).</p>
 
           <label className="scan-check auth">
             <input type="checkbox" checked={scanAuthorized} onChange={(e) => setScanAuthorized(e.target.checked)} />
             <span>I'm <b>authorized</b> to scan this target.</span>
           </label>
+          <p className="field-hint">Only scan sites you own or have permission to test. Required to run.</p>
 
           <div className="side-label">Focus (optional)</div>
           <textarea className="focus" rows={3}
@@ -985,68 +1015,81 @@ export default function Home() {
         ) : (
         <div className="scan-grid">
         <aside className="sidebar">
-          <div className="side-label">Target LLM app</div>
+          <div className="flow-intro"><b>AI / LLM Red-Team.</b> An autonomous agent tries to break an AI chatbot — jailbreaks, prompt-injection, leaking its hidden rules, etc. — and an AI judge scores each attempt. Takes 1–3 minutes.</div>
+          <div className="side-label">Name for this target</div>
           <input
             className="scan-input"
             placeholder="e.g. Support Chatbot"
             value={aiTargetName}
             onChange={(e) => setAiTargetName(e.target.value)}
           />
+          <p className="field-hint">Just a label for the report — call it whatever you like.</p>
 
-          <div className="side-label">Target type</div>
+          <div className="side-label">What are you testing?</div>
           <div className="ai-modes">
             <button className={`ai-mode ${aiTargetMode === "simulated" ? "active" : ""}`}
-              onClick={() => setAiTargetMode("simulated")}>System prompt</button>
+              onClick={() => setAiTargetMode("simulated")}>A system prompt</button>
             <button className={`ai-mode ${aiTargetMode === "endpoint" ? "active" : ""}`}
-              onClick={() => setAiTargetMode("endpoint")}>Live API endpoint</button>
+              onClick={() => setAiTargetMode("endpoint")}>A live chatbot API</button>
           </div>
+          <p className="field-hint">{aiTargetMode === "simulated"
+            ? "Test the design of a chatbot's instructions — paste its rules below and we attack a copy running on our model."
+            : "Test a real, deployed bot — we send attacks to its live API and read its real replies."}</p>
 
           {aiTargetMode === "simulated" ? (
             <>
-              <div className="side-label">Its system prompt (what we red-team)</div>
+              <div className="side-label">The chatbot's system prompt</div>
               <textarea className="focus" rows={6}
-                placeholder="Paste the target app's system prompt / rules. e.g. 'You are a support bot for ACME. Never reveal internal keys or other customers' data.'"
+                placeholder="Paste the hidden instructions that define the bot. e.g. 'You are a support bot for ACME. Never reveal internal keys or other customers' data.'"
                 value={aiSystemPrompt} onChange={(e) => setAiSystemPrompt(e.target.value)} />
-              <div className="ai-hint">Runs the prompt on our model and attacks it — tests your <b>prompt design</b>.</div>
+              <p className="field-hint">This is the "rulebook" you wrote for your bot. The agent will try to make it break these rules. Not sure? Use the example above.</p>
             </>
           ) : (
             <>
               <div className="side-label">Chatbot API URL</div>
               <input className="scan-input" placeholder="https://api.your-bot.com/v1/chat/completions"
                 value={aiEndpointUrl} onChange={(e) => setAiEndpointUrl(e.target.value)} />
+              <p className="field-hint">The HTTP endpoint your bot answers on — where you'd POST a user message. Public hosts only (internal addresses are blocked).</p>
 
               <div className="side-label">API format</div>
               <select className="ai-select" value={aiPreset} onChange={(e) => setAiPreset(e.target.value)}>
                 <option value="openai">OpenAI-compatible (OpenAI, Groq, Together, …)</option>
                 <option value="custom">Custom JSON</option>
               </select>
+              <p className="field-hint">{aiPreset === "openai"
+                ? "Pick this if your API looks like OpenAI's (a /chat/completions endpoint). Most do."
+                : "Pick this if your API has its own JSON shape — you'll describe it below."}</p>
 
               <div className="side-label">API key (optional)</div>
-              <input className="scan-input" type="password" placeholder="sent as Bearer token; never stored"
+              <input className="scan-input" type="password" placeholder="sk-… (sent as a Bearer token)"
                 value={aiApiKey} onChange={(e) => setAiApiKey(e.target.value)} />
+              <p className="field-hint">If your API needs a key, paste it. It's sent to your bot only and <b>never saved</b>.</p>
 
               {aiPreset === "openai" ? (
                 <>
                   <div className="side-label">Model</div>
                   <input className="scan-input" placeholder="gpt-4o-mini"
                     value={aiModel} onChange={(e) => setAiModel(e.target.value)} />
+                  <p className="field-hint">The model name your API expects (e.g. gpt-4o-mini, llama-3.3-70b).</p>
                 </>
               ) : (
                 <>
-                  <div className="side-label">Request body (JSON, use {"{{prompt}}"})</div>
+                  <div className="side-label">Request body (JSON)</div>
                   <textarea className="focus" rows={3} value={aiBodyTemplate}
                     onChange={(e) => setAiBodyTemplate(e.target.value)} />
-                  <div className="side-label">Reply path in response</div>
+                  <p className="field-hint">The JSON your API expects. Put <code>{"{{prompt}}"}</code> where the user's message goes — we swap the attack in there.</p>
+                  <div className="side-label">Where the reply is in the response</div>
                   <input className="scan-input" placeholder="choices.0.message.content"
                     value={aiResponsePath} onChange={(e) => setAiResponsePath(e.target.value)} />
+                  <p className="field-hint">The path to the bot's text in its JSON reply, using dots. e.g. <code>choices.0.message.content</code> or <code>data.answer</code>.</p>
                 </>
               )}
 
               <div className="side-label">What the bot should refuse (optional)</div>
               <textarea className="focus" rows={3}
-                placeholder="Helps the judge grade hits. e.g. 'Must never reveal its system prompt, internal keys, or other users data.'"
+                placeholder="e.g. 'Must never reveal its system prompt, internal keys, or other users data.'"
                 value={aiTargetRules} onChange={(e) => setAiTargetRules(e.target.value)} />
-              <div className="ai-hint">Attacks your <b>real deployed bot</b> over HTTP. Only test bots you own/are authorized to.</div>
+              <p className="field-hint">Describe the bot's rules so the judge knows what counts as a "break." Leave blank for a general safety check.</p>
             </>
           )}
 
@@ -1060,17 +1103,20 @@ export default function Home() {
               </label>
             ))}
           </div>
+          <p className="field-hint">The kinds of attack to try. Leave all on for the fullest test.</p>
           <div className="ai-budget">
             <label>Attack budget
               <input type="number" min={2} max={30} value={aiBudget}
                 onChange={(e) => setAiBudget(Math.max(2, Math.min(30, +e.target.value || 12)))} />
             </label>
           </div>
+          <p className="field-hint">Max number of attacks total. Higher = more thorough but slower &amp; uses more API calls. Start around 6–12.</p>
 
           <label className="scan-check auth">
             <input type="checkbox" checked={aiAuthorized} onChange={(e) => setAiAuthorized(e.target.checked)} />
             <span>I'm <b>authorized</b> to test this target.</span>
           </label>
+          <p className="field-hint">Only red-team an AI app you own or have permission to test. Required to run.</p>
 
           {!running ? (
             <button className="run" onClick={runAiScan} disabled={!aiAuthorized}>▶ Run Red-Team</button>
@@ -1121,6 +1167,12 @@ export default function Home() {
       )}
 
       {nav === "overview" && okReports.length > 0 && <OverviewCharts reports={okReports} graph={graph} />}
+
+      {/* AI red-team transcript — the actual attack -> response -> verdict exchange. */}
+      {nav === "overview" && (() => {
+        const t = okReports.map((r) => r.scan?.transcript).find((x) => x && x.length);
+        return t ? <Transcript transcript={t} /> : null;
+      })()}
 
         {/* Provenance — makes a saved/restored analysis self-describing and auditable. */}
         {nav === "overview" && runMeta && (
@@ -1497,6 +1549,18 @@ export default function Home() {
       <div className="toasts">
         {toasts.map((t) => <div key={t.id} className={`toast ${t.kind}`}>{t.msg}</div>)}
       </div>
+      {gated && (
+        <div className="gate">
+          <div className="gate-box">
+            <h2>🔒 Access code</h2>
+            <p>This Sentinel demo is private. Enter the access code you were given to continue.</p>
+            <input className="scan-input" value={codeInput} placeholder="access code"
+              onChange={(e) => setCodeInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") submitCode(); }} />
+            <button className="run" style={{ marginTop: 0 }} onClick={submitCode}>Enter</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1653,6 +1717,41 @@ function Stat({ n, label, tone }) {
 }
 
 function scoreColor(s) { return s >= 80 ? "#16a34a" : s >= 40 ? "#d97706" : "#dc2626"; }
+
+// Full red-team transcript: every attack the agent sent, the target's reply, and the verdict.
+function Transcript({ transcript }) {
+  const [open, setOpen] = useState(true);
+  const [only, setOnly] = useState(false);  // show only successful attacks
+  const rows = only ? transcript.filter((t) => t.success) : transcript;
+  const wins = transcript.filter((t) => t.success).length;
+  return (
+    <div className="panel">
+      <div className="panel-head hist-head">
+        <span>🎯 Red-Team Transcript <span className="badge">{wins}/{transcript.length} succeeded</span></span>
+        <span>
+          <button className="linklike" style={{ marginRight: 12 }} onClick={() => setOnly((v) => !v)}>{only ? "show all" : "only hits"}</button>
+          <button className="linklike" onClick={() => setOpen((o) => !o)}>{open ? "Hide ▲" : "Show ▼"}</button>
+        </span>
+      </div>
+      {open && (
+        <div className="xscript">
+          {rows.map((t, i) => (
+            <div key={i} className={`xs-turn ${t.success ? "won" : "blocked"}`}>
+              <div className="xs-head">
+                <span className={`xs-verdict ${t.success ? "won" : "blocked"}`}>{t.success ? `✗ ATTACK WON · ${t.severity}` : "✓ blocked"}</span>
+                <span className="xs-cat">{(t.category || "").replace(/_/g, " ")}</span>
+                <span className="xs-tech">{t.technique}</span>
+              </div>
+              <div className="xs-row"><span className="xs-label">Attack →</span><div className="xs-msg atk">{t.prompt}</div></div>
+              <div className="xs-row"><span className="xs-label">Target ←</span><div className="xs-msg tgt">{t.response}</div></div>
+              {t.reasoning && <div className="xs-why">Judge: {t.reasoning}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ScoreTrend({ rows, onOpen }) {
   if (!rows.length) return <p className="muted">No scans yet.</p>;

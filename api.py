@@ -46,6 +46,70 @@ app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
 
+# --- Abuse / cost guard (important for a PUBLIC deploy of a tool that makes outbound
+# requests and spends an API quota). Two layers, both env-configurable:
+#   1. Optional access gate: set SENTINEL_ACCESS_CODE to require an X-Access-Code header
+#      (share the code only with people you invite). Unset = open.
+#   2. Per-IP rate limits on the expensive endpoints, in-memory sliding window.
+import threading as _threading
+from collections import defaultdict as _dd
+
+ACCESS_CODE = os.getenv("SENTINEL_ACCESS_CODE", "").strip()
+_OPEN_PATHS = {"/health", "/docs", "/openapi.json"}
+# path-prefix -> (max requests, window seconds)
+_LIMITS = {
+    "/scans/ai": (int(os.getenv("RL_AI", "8")), 600),      # AI red-team: costly -> 8 / 10 min
+    "/scan":     (int(os.getenv("RL_WEB", "20")), 600),    # web scan
+    "/extract":  (int(os.getenv("RL_EXTRACT", "40")), 600),
+    "/exec-summary": (int(os.getenv("RL_LLM", "30")), 600),
+    "/correlate":    (int(os.getenv("RL_LLM", "30")), 600),
+    "/report-fixes": (int(os.getenv("RL_LLM", "60")), 600),
+}
+_hits = _dd(list)
+_rl_lock = _threading.Lock()
+
+
+def _client_ip(request):
+    fwd = request.headers.get("x-forwarded-for")  # Railway/Vercel put the real IP here
+    return (fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "?"))
+
+
+def _rate_ok(path, ip):
+    limit = next((v for p, v in _LIMITS.items() if path.startswith(p)), None)
+    if not limit:
+        return True
+    maxn, window = limit
+    now = time.time()
+    key = f"{ip}:{path.split('/')[1]}"
+    with _rl_lock:
+        q = [t for t in _hits[key] if now - t < window]
+        if len(q) >= maxn:
+            _hits[key] = q
+            return False
+        q.append(now)
+        _hits[key] = q
+        return True
+
+
+def _blocked(message, status):
+    # These early returns bypass the CORS middleware, so set the CORS header ourselves -
+    # otherwise the browser can't read the 401/429 and just reports "failed to fetch".
+    from starlette.responses import JSONResponse
+    return JSONResponse({"error": message}, status_code=status,
+                        headers={"Access-Control-Allow-Origin": "*"})
+
+
+@app.middleware("http")
+async def guard(request, call_next):
+    path = request.url.path
+    if request.method == "OPTIONS" or path in _OPEN_PATHS:
+        return await call_next(request)
+    if ACCESS_CODE and request.headers.get("x-access-code", "") != ACCESS_CODE:
+        return _blocked("This demo is access-gated. Enter the access code to continue.", 401)
+    if request.method == "POST" and not _rate_ok(path, _client_ip(request)):
+        return _blocked("Rate limit reached — please wait a few minutes before running another scan.", 429)
+    return await call_next(request)
+
 
 def read_report(raw_bytes: bytes, filename: str) -> str:
     """Turn an uploaded file into text. PDFs get real text extraction."""
