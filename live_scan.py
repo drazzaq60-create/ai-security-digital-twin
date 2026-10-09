@@ -120,20 +120,41 @@ def _check_tls(host, port):
 
 
 def _check_http(base_url, host):
-    """Fetch the target and inspect security headers. Returns (findings, reached)."""
+    """Fetch the target and inspect security headers. Returns (findings, reached).
+
+    Robust against real sites: reads headers even when the TLS cert is invalid (the cert is
+    judged separately by _check_tls), and falls back from https to http so an HTTP-only site
+    is still scanned (and flagged for plaintext) instead of looking 'unreachable'."""
     out = []
-    req = urllib.request.Request(base_url, headers={"User-Agent": USER_AGENT}, method="GET")
-    try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-            final_url = resp.geturl()
-            headers = {k.lower(): v for k, v in resp.headers.items()}
-    except urllib.error.HTTPError as e:
-        # Still got a response with headers - analyze them.
-        final_url = base_url
-        headers = {k.lower(): v for k, v in (e.headers or {}).items()}
-    except Exception as e:
+    # Scanner context: don't reject on a bad cert - we still want to read the headers.
+    noverify = ssl.create_default_context()
+    noverify.check_hostname = False
+    noverify.verify_mode = ssl.CERT_NONE
+
+    candidates = [base_url]
+    if base_url.startswith("https://"):
+        candidates.append("http://" + base_url[len("https://"):])  # fall back to plain HTTP
+
+    final_url = headers = None
+    last_err = None
+    for url in candidates:
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT}, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT, context=noverify) as resp:
+                final_url = resp.geturl()
+                headers = {k.lower(): v for k, v in resp.headers.items()}
+            break
+        except urllib.error.HTTPError as e:            # got a response (4xx/5xx) with headers
+            final_url = url
+            headers = {k.lower(): v for k, v in (e.headers or {}).items()}
+            break
+        except Exception as e:
+            last_err = e
+            continue
+
+    if headers is None:
         return [_f("Target unreachable over HTTP(S)", host, "Info", "recon",
-                   f"Could not fetch {base_url}: {e}")], False
+                   f"Could not fetch {base_url}: {last_err}")], False
 
     # Served over plain HTTP (not upgraded to https) is a real exposure.
     if final_url.startswith("http://"):
