@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import xml.etree.ElementTree as ET
 
 from target_client import guard_url, TargetError
@@ -112,6 +113,81 @@ def _nikto_parse(stdout, host):
     return out
 
 
+def _whatweb_cmd(target):
+    url = target if target.startswith(("http://", "https://")) else "https://" + target
+    return ["whatweb", "--log-json={OUT}", "--no-errors", "-q", url]
+
+
+def _whatweb_parse(output, host):
+    try:
+        data = json.loads(output)
+    except Exception:
+        data = [json.loads(l) for l in output.splitlines() if l.strip().startswith("{")] or []
+    techs = set()
+    for entry in (data if isinstance(data, list) else [data]):
+        for name, info in (entry.get("plugins") or {}).items():
+            ver = ""
+            if isinstance(info, dict) and info.get("version"):
+                ver = " " + ",".join(str(v) for v in info["version"])
+            techs.add((name + ver).strip())
+    if not techs:
+        return []
+    return [_f("Technology stack fingerprinted", host, "Info", "recon",
+               "whatweb detected: " + ", ".join(sorted(techs)[:25]), "tool:whatweb")]
+
+
+# Wapiti: active web-app DAST (SQLi, XSS, path traversal, command exec, SSRF, …).
+_WAPITI_SEV = {
+    "SQL Injection": "High", "Blind SQL Injection": "High", "Cross Site Scripting": "High",
+    "Command execution": "Critical", "Path Traversal": "High", "Server Side Request Forgery": "High",
+    "XML External Entity": "High", "CRLF Injection": "Medium", "Open Redirect": "Medium",
+    "Backup file": "Medium", "Htaccess Bypass": "Medium", "Secure Flag cookie": "Low",
+    "HttpOnly Flag cookie": "Low", "Content Security Policy Configuration": "Low",
+    "HTTP Secure Headers": "Low", "Internal Server Error": "Low", "Fingerprint web technology": "Info",
+}
+
+
+def _wapiti_cmd(target):
+    url = target if target.startswith(("http://", "https://")) else "https://" + target
+    return ["wapiti", "-u", url, "--format", "json", "-o", "{OUT}",
+            "--flush-session", "--scope", "folder", "--max-scan-time", str(TIMEOUT)]
+
+
+def _wapiti_parse(output, host):
+    out = []
+    try:
+        data = json.loads(output)
+    except Exception:
+        return out
+    for category, items in (data.get("vulnerabilities") or {}).items():
+        sev = _WAPITI_SEV.get(category, "Medium")
+        for it in (items or []):
+            detail = f"{it.get('method','')} {it.get('path','')} — {it.get('info','')}".strip()
+            out.append(_f(category, host, sev, "webapp", detail, "tool:wapiti"))
+    return out
+
+
+def _testssl_cmd(target):
+    host = target.replace("https://", "").replace("http://", "").split("/")[0]
+    return ["testssl.sh", "--jsonfile", "{OUT}", "--quiet", "--color", "0", host]
+
+
+def _testssl_parse(output, host):
+    out = []
+    smap = {"CRITICAL": "Critical", "HIGH": "High", "MEDIUM": "Medium", "LOW": "Low", "WARN": "Low"}
+    try:
+        data = json.loads(output)
+    except Exception:
+        return out
+    for e in (data if isinstance(data, list) else data.get("scanResult", [])):
+        sev = smap.get(str(e.get("severity", "")).upper())
+        if not sev:
+            continue
+        out.append(_f(e.get("id", "tls finding"), host, sev, "tls",
+                      e.get("finding", ""), "tool:testssl"))
+    return out
+
+
 TOOLS = {
     "nmap":    {"name": "Nmap",    "binary": "nmap",
                 "desc": "Port + service discovery (what's exposed and what's running).",
@@ -125,6 +201,15 @@ TOOLS = {
     "nikto":   {"name": "Nikto",   "binary": "nikto",
                 "desc": "Web-server scanner for known misconfigurations and dangerous files.",
                 "cmd": _nikto_cmd, "parse": _nikto_parse},
+    "wapiti":  {"name": "Wapiti",  "binary": "wapiti", "outfile": True,
+                "desc": "Active web-app scanner (SQL injection, XSS, path traversal, command exec, SSRF).",
+                "cmd": _wapiti_cmd, "parse": _wapiti_parse},
+    "whatweb": {"name": "WhatWeb", "binary": "whatweb", "outfile": True,
+                "desc": "Fingerprints the tech stack (server, framework, CMS, versions) — recon.",
+                "cmd": _whatweb_cmd, "parse": _whatweb_parse},
+    "testssl": {"name": "testssl.sh", "binary": "testssl.sh", "outfile": True,
+                "desc": "Comprehensive TLS/SSL audit (protocols, ciphers, vulns like Heartbleed/ROBOT).",
+                "cmd": _testssl_cmd, "parse": _testssl_parse},
 }
 
 
@@ -133,6 +218,10 @@ def list_tools():
     tools = [{"id": tid, "name": t["name"], "desc": t["desc"],
               "installed": bool(shutil.which(t["binary"]))} for tid, t in TOOLS.items()]
     return {"enabled": ENABLED, "tools": tools}
+
+
+def _host_of(target):
+    return target.replace("https://", "").replace("http://", "").split("/")[0]
 
 
 def run_tool(tool_id, target):
@@ -145,13 +234,57 @@ def run_tool(tool_id, target):
         raise ValueError(f"Unknown tool: {tool_id}")
     if not shutil.which(tool["binary"]):
         raise ValueError(f"{tool['name']} is not installed on this server.")
-    guard_url("http://" + target.replace("https://", "").replace("http://", ""))  # SSRF guard on the host
+    guard_url("http://" + _host_of(target))  # SSRF guard on the host
 
-    proc = subprocess.run(tool["cmd"](target), capture_output=True, text=True, timeout=TIMEOUT)
-    stdout = proc.stdout or proc.stderr
-    host = target.replace("https://", "").replace("http://", "").split("/")[0]
-    findings = tool["parse"](stdout, host)
+    cmd = tool["cmd"](target)
+    outfile = None
+    if tool.get("outfile"):  # tool writes its report to a file ({OUT} placeholder)
+        fd, outfile = tempfile.mkstemp(suffix=".out")
+        os.close(fd)
+        cmd = [a.replace("{OUT}", outfile) for a in cmd]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT)
+        if outfile:
+            try:
+                with open(outfile, encoding="utf-8", errors="ignore") as f:
+                    output = f.read()
+            except Exception:
+                output = proc.stdout or proc.stderr
+        else:
+            output = proc.stdout or proc.stderr
+    finally:
+        if outfile:
+            try: os.remove(outfile)
+            except OSError: pass
+
+    findings = tool["parse"](output, _host_of(target))
     return findings, {"tool": tool_id, "tool_name": tool["name"], "returncode": proc.returncode}
+
+
+def run_all(target, log=None):
+    """Run EVERY installed tool against one target and merge (dedup) the findings — the
+    'complete picture' from one URL. `log(msg)` is an optional progress callback."""
+    merged, ran = [], []
+    for tid, t in TOOLS.items():
+        if not shutil.which(t["binary"]):
+            continue
+        if log:
+            log(f"Running {t['name']} …")
+        try:
+            f, _ = run_tool(tid, target)
+            merged += f
+            ran.append(t["name"])
+        except Exception as e:
+            if log:
+                log(f"  {t['name']} skipped: {e}")
+    seen, out = set(), []
+    for f in merged:
+        k = (f["name"], f["host"], f["source"])
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(f)
+    return out, ran
 
 
 def run_tool_job(job_id, tool_id, target):
@@ -161,20 +294,36 @@ def run_tool_job(job_id, tool_id, target):
     import scoring
     from store import get_store, new_id
     try:
-        tname = TOOLS.get(tool_id, {}).get("name", tool_id)
-        jobs.set_log(job_id, [f"Running {tname} against {target} … (up to {TIMEOUT}s)"])
-        try:
-            findings, meta = run_tool(tool_id, target)
-        except subprocess.TimeoutExpired:
-            jobs.fail(job_id, f"{tool_id} timed out after {TIMEOUT}s.")
-            return
-        except (TargetError, ValueError) as e:
-            jobs.fail(job_id, str(e))
-            return
+        _logbuf = []
+        def _log(msg):
+            _logbuf.append(msg); jobs.set_log(job_id, list(_logbuf))
+
+        if tool_id == "all":  # full scan: every installed tool, merged
+            if not ENABLED:
+                jobs.fail(job_id, "Live tools are disabled on this server (set ENABLE_LIVE_TOOLS=1).")
+                return
+            try:
+                guard_url("http://" + _host_of(target))
+            except TargetError as e:
+                jobs.fail(job_id, str(e)); return
+            _log(f"Full scan of {target} — running all installed tools…")
+            findings, ran = run_all(target, log=_log)
+            tool_name = "Full scan (" + ", ".join(ran) + ")" if ran else "Full scan"
+            meta = {"tool": "all", "tool_name": tool_name}
+        else:
+            _log(f"Running {TOOLS.get(tool_id, {}).get('name', tool_id)} against {target} … (up to {TIMEOUT}s)")
+            try:
+                findings, meta = run_tool(tool_id, target)
+            except subprocess.TimeoutExpired:
+                jobs.fail(job_id, f"{tool_id} timed out after {TIMEOUT}s.")
+                return
+            except (TargetError, ValueError) as e:
+                jobs.fail(job_id, str(e))
+                return
 
         if not findings:
-            findings = [_f("No issues reported by " + tool_id, target, "Info", "recon",
-                           f"{tool_id} ran and returned no parseable findings.", "tool:" + tool_id)]
+            findings = [_f("No issues reported", target, "Info", "recon",
+                           "The tool(s) ran and returned no parseable findings.", "tool:" + tool_id)]
         rep = {
             "name": f"{meta['tool_name']}: {target}", "findings": findings, "fixes": [],
             "false_positives": [], "security": None, "parser": "tool:" + tool_id,
@@ -190,8 +339,7 @@ def run_tool_job(job_id, tool_id, target):
                      "tool": tool_id},
         }
         get_store().save(record)
-        jobs.set_log(job_id, [f"Running {meta['tool_name']} against {target} …",
-                              f"✓ {meta['tool_name']} complete — {len(findings)} finding(s), score {sc['score']}"])
+        _log(f"✓ complete — {len(findings)} finding(s), score {sc['score']} ({sc['band']})")
         jobs.finish(job_id, {"run_id": record["_id"], "report": rep,
                              "score": sc["score"], "band": sc["band"], "findings": len(findings)})
     except Exception as e:

@@ -78,10 +78,16 @@ public instance running scanners would be an open scan-proxy / abuse vector). En
 where you control who uses it:
 
 1. Install the tools you want on the host, e.g. on Debian/Ubuntu:
-   `apt-get install -y nmap nikto sslscan` (Nuclei: download the ProjectDiscovery release).
+   `apt-get install -y nmap nikto sslscan whatweb` · `pip install wapiti3` ·
+   Nuclei + testssl.sh from their GitHub releases. (Only installed tools are offered.)
 2. Set **`ENABLE_LIVE_TOOLS=1`** (and `SENTINEL_ALLOW_PRIVATE_TARGETS=1` only for a local lab).
-3. The Web App Scan's **Scan engine** dropdown then lists each installed tool. Targets are
-   still SSRF-guarded and rate-limited.
+3. The Web App Scan's **Scan engine** dropdown then lists each installed tool, plus
+   **"Full scan — all tools"** which runs them all against one URL and merges the findings for
+   the complete vulnerability picture. Targets are still SSRF-guarded and rate-limited.
+
+The suite spans the categories: **Nmap** (ports/services) · **Nuclei** (thousands of known-CVE/
+exposure templates) · **Wapiti** (active web-app bugs: SQLi, XSS, path traversal, command exec) ·
+**Nikto** (web-server misconfig) · **sslscan / testssl.sh** (TLS) · **WhatWeb** (tech fingerprint).
 
 Great for a local run or a screen-recorded demo; leave it unset on the hosted link.
 

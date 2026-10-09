@@ -292,7 +292,11 @@ def start_tool_scan(body: ToolScanBody):
         return {"error": "Confirm you're authorized to scan this target."}
     if not body.target.strip():
         return {"error": "Provide a target host/URL."}
-    if not any(t["id"] == body.tool and t["installed"] for t in cat["tools"]):
+    installed = [t for t in cat["tools"] if t["installed"]]
+    if body.tool == "all":
+        if not installed:
+            return {"error": "No scanners are installed on this server."}
+    elif not any(t["id"] == body.tool and t["installed"] for t in cat["tools"]):
         return {"error": f"{body.tool} is not available on this server."}
     try:
         guard_url("http://" + body.target.strip().replace("https://", "").replace("http://", ""))

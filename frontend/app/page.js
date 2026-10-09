@@ -1030,6 +1030,9 @@ export default function Home() {
           <div className="side-label">Scan engine</div>
           <select className="ai-select" value={webEngine} onChange={(e) => setWebEngine(e.target.value)}>
             <option value="quick">Quick — built-in (TLS, headers, ports)</option>
+            {toolsCatalog?.enabled && (toolsCatalog.tools || []).some((t) => t.installed) && (
+              <option value="all">⚡ Full scan — all installed tools (complete picture)</option>
+            )}
             {toolsCatalog?.enabled && (toolsCatalog.tools || []).filter((t) => t.installed).map((t) => (
               <option key={t.id} value={t.id}>{t.name} — real scanner</option>
             ))}
@@ -1037,7 +1040,9 @@ export default function Home() {
           <p className="field-hint">
             {webEngine === "quick"
               ? "Fast, safe, built-in checks — no external tools needed."
-              : ((toolsCatalog?.tools || []).find((t) => t.id === webEngine)?.desc || "Real scanner.")}
+              : webEngine === "all"
+                ? "Runs every installed scanner against this URL and merges the results — the fullest vulnerability picture."
+                : ((toolsCatalog?.tools || []).find((t) => t.id === webEngine)?.desc || "Real scanner.")}
           </p>
           {toolsCatalog && !toolsCatalog.enabled && (
             <p className="field-hint">💡 Real scanners (Nmap, Nuclei, Nikto, sslscan) are available when self-hosted with <code>ENABLE_LIVE_TOOLS=1</code> — kept off on this hosted demo for safety.</p>
