@@ -238,6 +238,8 @@ export default function Home() {
   const [aiBodyTemplate, setAiBodyTemplate] = useState('{"messages":[{"role":"user","content":"{{prompt}}"}]}');
   const [aiResponsePath, setAiResponsePath] = useState("choices.0.message.content");
   const [aiTargetRules, setAiTargetRules] = useState("");
+  const [toolsCatalog, setToolsCatalog] = useState(null);   // {enabled, tools:[...]}
+  const [webEngine, setWebEngine] = useState("quick");      // quick (built-in) | nmap | nuclei | ...
   const toggleAiCategory = (k) =>
     setAiCategories((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
   const [cmpA, setCmpA] = useState("");
@@ -560,6 +562,63 @@ export default function Home() {
     }
   }
 
+  async function loadTools() {
+    try {
+      const r = await fetch(`${API_URL}/tools`);
+      if (r.ok) setToolsCatalog(await r.json());
+    } catch { setToolsCatalog({ enabled: false, tools: [] }); }
+  }
+
+  // Run the web scan with the chosen engine: built-in quick scan, or a real tool.
+  function runWebScan() { return webEngine === "quick" ? runScan() : runToolScan(); }
+
+  // Run a real external scanner (Nmap/Nuclei/…) against the web target, as a background job.
+  async function runToolScan() {
+    const target = scanTarget.trim();
+    const selectedTool = webEngine;
+    if (!target) { setError("Enter a target host/URL."); return; }
+    if (!scanAuthorized) { setError("Confirm you're authorized to scan this target."); return; }
+    setError(""); setRunning(true); setLog([]); setReports([]);
+    setCorrelation(null); setCorrelationError(""); setGraph(null); setGraphError("");
+    setSim(null); setSimCut(null); setRunMeta(null); setExecSummary("");
+
+    const ac = new AbortController(); abortRef.current = ac;
+    const startedAt = Date.now(); setElapsed(0);
+    clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => setElapsed(Math.round((Date.now() - startedAt) / 1000)), 1000);
+    try {
+      logLine(`Running ${selectedTool} against ${target}…`, "start");
+      const res = await fetchStage(`${API_URL}/scan-tool`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tool: selectedTool, target, authorized: true }),
+      }, ac.signal);
+      if (!res.ok) throw new Error(`start failed (${res.status})`);
+      const started = await res.json();
+      if (started.error) { setError(started.error); logLine(`✗ ${started.error}`, "err"); return; }
+      const jobId = started.job_id;
+      let shown = 0;
+      while (true) {
+        if (ac.signal.aborted) { logLine("Cancelled.", "err"); return; }
+        await new Promise((r) => setTimeout(r, 1800));
+        let pr; try { pr = await fetch(`${API_URL}/scan-tool/${jobId}`).then((r) => r.json()); } catch { continue; }
+        if (Array.isArray(pr.log)) { for (let i = shown; i < pr.log.length; i++) logLine(pr.log[i], "info"); shown = pr.log.length; }
+        if (pr.status === "error") { setError(pr.error || "scan failed"); logLine(`✗ ${pr.error}`, "err"); break; }
+        if (pr.status === "done") {
+          const r = pr.result || {};
+          if (r.report) setReports([r.report]);
+          logLine(`✓ ${selectedTool} complete — ${r.findings} finding(s), score ${r.score} (${r.band}).`, "done");
+          loadRuns(); setNav("overview"); toast(`${selectedTool} scan complete`, "ok"); break;
+        }
+      }
+    } catch (e) {
+      const m = errMsg(e);
+      if (m !== "cancelled") setError(`${m} — is the backend running on :8000?`);
+      logLine(`✗ ${m}`, "err");
+    } finally {
+      clearInterval(timerRef.current); abortRef.current = null; setRunning(false);
+    }
+  }
+
   // One report's full pipeline (extract -> fixes). Reused by analyze() and retryReport().
   async function analyzeOne(f, signal) {
     const rep = {
@@ -844,7 +903,7 @@ export default function Home() {
           <div className="launch-desc">Point an autonomous agent at a chatbot's system prompt or a live API. It crafts adaptive attacks and an LLM-judge scores each hit.</div>
           <div className="launch-go">Launch red-team →</div>
         </button>
-        <button className="launch-card b" onClick={() => setScanMode("auto")}>
+        <button className="launch-card b" onClick={() => { setScanMode("auto"); loadTools(); }}>
           <div className="launch-ic">📡</div>
           <div className="launch-title">Web App Scan</div>
           <div className="launch-desc">Point at an authorized URL for a safe, non-intrusive check: TLS/cert, HTTP security headers, and common-port exposure.</div>
@@ -964,15 +1023,35 @@ export default function Home() {
             placeholder="example.com  or  https://host:8443"
             value={scanTarget}
             onChange={(e) => setScanTarget(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !running) runScan(); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && !running) runWebScan(); }}
           />
           <p className="field-hint">The domain or URL to check, e.g. <code>mysite.com</code>. Add <code>:port</code> only for a non-standard port.</p>
 
-          <label className="scan-check">
-            <input type="checkbox" checked={scanPorts} onChange={(e) => setScanPorts(e.target.checked)} />
-            <span>Probe common ports (FTP, SSH, RDP, DB, …)</span>
-          </label>
-          <p className="field-hint">Tries to connect to ~10 common ports to see what's exposed. Uncheck to only check TLS + headers (faster).</p>
+          <div className="side-label">Scan engine</div>
+          <select className="ai-select" value={webEngine} onChange={(e) => setWebEngine(e.target.value)}>
+            <option value="quick">Quick — built-in (TLS, headers, ports)</option>
+            {toolsCatalog?.enabled && (toolsCatalog.tools || []).filter((t) => t.installed).map((t) => (
+              <option key={t.id} value={t.id}>{t.name} — real scanner</option>
+            ))}
+          </select>
+          <p className="field-hint">
+            {webEngine === "quick"
+              ? "Fast, safe, built-in checks — no external tools needed."
+              : ((toolsCatalog?.tools || []).find((t) => t.id === webEngine)?.desc || "Real scanner.")}
+          </p>
+          {toolsCatalog && !toolsCatalog.enabled && (
+            <p className="field-hint">💡 Real scanners (Nmap, Nuclei, Nikto, sslscan) are available when self-hosted with <code>ENABLE_LIVE_TOOLS=1</code> — kept off on this hosted demo for safety.</p>
+          )}
+
+          {webEngine === "quick" && (
+            <>
+              <label className="scan-check">
+                <input type="checkbox" checked={scanPorts} onChange={(e) => setScanPorts(e.target.checked)} />
+                <span>Probe common ports (FTP, SSH, RDP, DB, …)</span>
+              </label>
+              <p className="field-hint">Tries to connect to ~10 common ports to see what's exposed. Uncheck to only check TLS + headers (faster).</p>
+            </>
+          )}
 
           <label className="scan-check auth">
             <input type="checkbox" checked={scanAuthorized} onChange={(e) => setScanAuthorized(e.target.checked)} />
@@ -986,7 +1065,7 @@ export default function Home() {
             value={message} onChange={(e) => setMessage(e.target.value)} />
 
           {!running ? (
-            <button className="run" onClick={runScan} disabled={!scanAuthorized}>▶ Run Scan</button>
+            <button className="run" onClick={runWebScan} disabled={!scanAuthorized}>▶ {webEngine === "quick" ? "Run Scan" : `Run ${webEngine}`}</button>
           ) : (
             <div className="run-row">
               <button className="run" disabled>Scanning… ⏱ {elapsed}s</button>

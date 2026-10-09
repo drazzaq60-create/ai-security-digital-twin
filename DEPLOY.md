@@ -70,6 +70,21 @@ Nicer than `*.vercel.app`. After the Vercel app is live:
 
 ---
 
+## 4b. Real external scanners (self-hosted only)
+
+The Web App Scan can run **real tools** — Nmap, Nuclei, Nikto, sslscan — against a target,
+not just the built-in lightweight check. This is **off on the public demo on purpose** (a
+public instance running scanners would be an open scan-proxy / abuse vector). Enable it only
+where you control who uses it:
+
+1. Install the tools you want on the host, e.g. on Debian/Ubuntu:
+   `apt-get install -y nmap nikto sslscan` (Nuclei: download the ProjectDiscovery release).
+2. Set **`ENABLE_LIVE_TOOLS=1`** (and `SENTINEL_ALLOW_PRIVATE_TARGETS=1` only for a local lab).
+3. The Web App Scan's **Scan engine** dropdown then lists each installed tool. Targets are
+   still SSRF-guarded and rate-limited.
+
+Great for a local run or a screen-recorded demo; leave it unset on the hosted link.
+
 ## 5. After it's up
 - Open the Vercel URL, run a web scan or an AI red-team, and check the dashboard.
 - CORS is already `*`, so no extra wiring.

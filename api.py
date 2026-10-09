@@ -59,6 +59,7 @@ _OPEN_PATHS = {"/health", "/docs", "/openapi.json"}
 # path-prefix -> (max requests, window seconds)
 _LIMITS = {
     "/scans/ai": (int(os.getenv("RL_AI", "8")), 600),      # AI red-team: costly -> 8 / 10 min
+    "/scan-tool": (int(os.getenv("RL_TOOL", "10")), 600),  # real scanners
     "/scan":     (int(os.getenv("RL_WEB", "20")), 600),    # web scan
     "/extract":  (int(os.getenv("RL_EXTRACT", "40")), 600),
     "/exec-summary": (int(os.getenv("RL_LLM", "30")), 600),
@@ -260,6 +261,51 @@ def start_ai_scan(body: AIScanBody):
 @app.get("/scans/ai/{job_id}")
 def ai_scan_status(job_id: str):
     """Poll an AI red-team job: status (running|done|error), live log, progress, result."""
+    import jobs
+    j = jobs.get(job_id)
+    return j if j is not None else {"error": "not found"}
+
+
+@app.get("/tools")
+def tools_catalog():
+    """List the real external scanners available on THIS server (gated by ENABLE_LIVE_TOOLS;
+    only installed tools are offered)."""
+    from tool_scan import list_tools
+    return list_tools()
+
+
+class ToolScanBody(BaseModel):
+    tool: str = ""
+    target: str = ""
+    authorized: bool = False
+
+
+@app.post("/scan-tool")
+def start_tool_scan(body: ToolScanBody):
+    """Run a real scanner (Nmap/Nuclei/Nikto/sslscan) as a background job. Gated + SSRF-guarded."""
+    import jobs
+    from tool_scan import run_tool_job, list_tools, guard_url, TargetError
+    cat = list_tools()
+    if not cat["enabled"]:
+        return {"error": "Live tools are disabled on this server. Run self-hosted with ENABLE_LIVE_TOOLS=1."}
+    if not body.authorized:
+        return {"error": "Confirm you're authorized to scan this target."}
+    if not body.target.strip():
+        return {"error": "Provide a target host/URL."}
+    if not any(t["id"] == body.tool and t["installed"] for t in cat["tools"]):
+        return {"error": f"{body.tool} is not available on this server."}
+    try:
+        guard_url("http://" + body.target.strip().replace("https://", "").replace("http://", ""))
+    except TargetError as e:
+        return {"error": str(e)}
+    jid = jobs.create("tool", body.target.strip())
+    jobs.run_in_thread(run_tool_job, jid, body.tool, body.target.strip())
+    return {"job_id": jid}
+
+
+@app.get("/scan-tool/{job_id}")
+def tool_scan_status(job_id: str):
+    """Poll a tool-scan job."""
     import jobs
     j = jobs.get(job_id)
     return j if j is not None else {"error": "not found"}
