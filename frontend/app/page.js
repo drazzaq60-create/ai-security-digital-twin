@@ -239,7 +239,10 @@ export default function Home() {
   const [aiResponsePath, setAiResponsePath] = useState("choices.0.message.content");
   const [aiTargetRules, setAiTargetRules] = useState("");
   const [toolsCatalog, setToolsCatalog] = useState(null);   // {enabled, tools:[...]}
-  const [webEngine, setWebEngine] = useState("quick");      // quick (built-in) | nmap | nuclei | ...
+  const [webEngine, setWebEngine] = useState("quick");      // quick (built-in) | tools (pick below)
+  const [selectedTools, setSelectedTools] = useState([]);   // chosen real-tool ids
+  const toggleTool = (id) =>
+    setSelectedTools((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   const toggleAiCategory = (k) =>
     setAiCategories((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
   const [cmpA, setCmpA] = useState("");
@@ -572,11 +575,11 @@ export default function Home() {
   // Run the web scan with the chosen engine: built-in quick scan, or a real tool.
   function runWebScan() { return webEngine === "quick" ? runScan() : runToolScan(); }
 
-  // Run a real external scanner (Nmap/Nuclei/…) against the web target, as a background job.
+  // Run the chosen real scanner(s) against the web target, as a background job.
   async function runToolScan() {
     const target = scanTarget.trim();
-    const selectedTool = webEngine;
     if (!target) { setError("Enter a target host/URL."); return; }
+    if (selectedTools.length === 0) { setError("Pick at least one tool to run."); return; }
     if (!scanAuthorized) { setError("Confirm you're authorized to scan this target."); return; }
     setError(""); setRunning(true); setLog([]); setReports([]);
     setCorrelation(null); setCorrelationError(""); setGraph(null); setGraphError("");
@@ -587,10 +590,10 @@ export default function Home() {
     clearInterval(timerRef.current);
     timerRef.current = setInterval(() => setElapsed(Math.round((Date.now() - startedAt) / 1000)), 1000);
     try {
-      logLine(`Running ${selectedTool} against ${target}…`, "start");
+      logLine(`Running ${selectedTools.length} tool(s) against ${target}…`, "start");
       const res = await fetchStage(`${API_URL}/scan-tool`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tool: selectedTool, target, authorized: true }),
+        body: JSON.stringify({ tools: selectedTools, target, authorized: true }),
       }, ac.signal);
       if (!res.ok) throw new Error(`start failed (${res.status})`);
       const started = await res.json();
@@ -606,8 +609,8 @@ export default function Home() {
         if (pr.status === "done") {
           const r = pr.result || {};
           if (r.report) setReports([r.report]);
-          logLine(`✓ ${selectedTool} complete — ${r.findings} finding(s), score ${r.score} (${r.band}).`, "done");
-          loadRuns(); setNav("overview"); toast(`${selectedTool} scan complete`, "ok"); break;
+          logLine(`✓ Tool scan complete — ${r.findings} finding(s), score ${r.score} (${r.band}).`, "done");
+          loadRuns(); setNav("overview"); toast(`Tool scan complete`, "ok"); break;
         }
       }
     } catch (e) {
@@ -1028,24 +1031,38 @@ export default function Home() {
           <p className="field-hint">The domain or URL to check, e.g. <code>mysite.com</code>. Add <code>:port</code> only for a non-standard port.</p>
 
           <div className="side-label">Scan engine</div>
-          <select className="ai-select" value={webEngine} onChange={(e) => setWebEngine(e.target.value)}>
+          <select className="ai-select" value={webEngine}
+            onChange={(e) => { const v = e.target.value; setWebEngine(v); if (v === "tools" && selectedTools.length === 0) setSelectedTools((toolsCatalog?.tools || []).filter((t) => t.installed).map((t) => t.id)); }}>
             <option value="quick">Quick — built-in (TLS, headers, ports)</option>
             {toolsCatalog?.enabled && (toolsCatalog.tools || []).some((t) => t.installed) && (
-              <option value="all">⚡ Full scan — all installed tools (complete picture)</option>
+              <option value="tools">Real scanners — pick which to run</option>
             )}
-            {toolsCatalog?.enabled && (toolsCatalog.tools || []).filter((t) => t.installed).map((t) => (
-              <option key={t.id} value={t.id}>{t.name} — real scanner</option>
-            ))}
           </select>
           <p className="field-hint">
             {webEngine === "quick"
               ? "Fast, safe, built-in checks — no external tools needed."
-              : webEngine === "all"
-                ? "Runs every installed scanner against this URL and merges the results — the fullest vulnerability picture."
-                : ((toolsCatalog?.tools || []).find((t) => t.id === webEngine)?.desc || "Real scanner.")}
+              : "Choose any combination below. All selected tools run against this one URL and their findings are merged."}
           </p>
+
+          {webEngine === "tools" && (
+            <div className="tool-pick">
+              <div className="tool-pick-head">
+                <span>Tools to run ({selectedTools.length})</span>
+                <button className="linklike" onClick={() => {
+                  const inst = (toolsCatalog?.tools || []).filter((t) => t.installed).map((t) => t.id);
+                  setSelectedTools(selectedTools.length === inst.length ? [] : inst);
+                }}>{selectedTools.length === (toolsCatalog?.tools || []).filter((t) => t.installed).length ? "clear all" : "select all"}</button>
+              </div>
+              {(toolsCatalog?.tools || []).filter((t) => t.installed).map((t) => (
+                <label key={t.id} className="tool-opt">
+                  <input type="checkbox" checked={selectedTools.includes(t.id)} onChange={() => toggleTool(t.id)} />
+                  <span><b>{t.name}</b> — {t.desc}</span>
+                </label>
+              ))}
+            </div>
+          )}
           {toolsCatalog && !toolsCatalog.enabled && (
-            <p className="field-hint">💡 Real scanners (Nmap, Nuclei, Nikto, sslscan) are available when self-hosted with <code>ENABLE_LIVE_TOOLS=1</code> — kept off on this hosted demo for safety.</p>
+            <p className="field-hint">💡 Real scanners (Nmap, Nuclei, Wapiti, Nikto, sslscan, testssl, WhatWeb) are available when self-hosted with <code>ENABLE_LIVE_TOOLS=1</code> — kept off on this hosted demo for safety.</p>
           )}
 
           {webEngine === "quick" && (
@@ -1070,7 +1087,7 @@ export default function Home() {
             value={message} onChange={(e) => setMessage(e.target.value)} />
 
           {!running ? (
-            <button className="run" onClick={runWebScan} disabled={!scanAuthorized}>▶ {webEngine === "quick" ? "Run Scan" : `Run ${webEngine}`}</button>
+            <button className="run" onClick={runWebScan} disabled={!scanAuthorized}>▶ {webEngine === "quick" ? "Run Scan" : `Run ${selectedTools.length} tool(s)`}</button>
           ) : (
             <div className="run-row">
               <button className="run" disabled>Scanning… ⏱ {elapsed}s</button>

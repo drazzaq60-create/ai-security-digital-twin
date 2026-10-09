@@ -275,14 +275,16 @@ def tools_catalog():
 
 
 class ToolScanBody(BaseModel):
-    tool: str = ""
+    tools: List[str] = []        # tool ids to run (['all'] = every installed tool)
+    tool: str = ""               # back-compat: a single tool id
     target: str = ""
     authorized: bool = False
 
 
 @app.post("/scan-tool")
 def start_tool_scan(body: ToolScanBody):
-    """Run a real scanner (Nmap/Nuclei/Nikto/sslscan) as a background job. Gated + SSRF-guarded."""
+    """Run one or more real scanners (Nmap/Nuclei/Wapiti/…) as a background job, merged.
+    Gated + SSRF-guarded + rate-limited."""
     import jobs
     from tool_scan import run_tool_job, list_tools, guard_url, TargetError
     cat = list_tools()
@@ -292,18 +294,21 @@ def start_tool_scan(body: ToolScanBody):
         return {"error": "Confirm you're authorized to scan this target."}
     if not body.target.strip():
         return {"error": "Provide a target host/URL."}
-    installed = [t for t in cat["tools"] if t["installed"]]
-    if body.tool == "all":
-        if not installed:
-            return {"error": "No scanners are installed on this server."}
-    elif not any(t["id"] == body.tool and t["installed"] for t in cat["tools"]):
-        return {"error": f"{body.tool} is not available on this server."}
+
+    tools = body.tools or ([body.tool] if body.tool else [])
+    installed_ids = {t["id"] for t in cat["tools"] if t["installed"]}
+    if not installed_ids:
+        return {"error": "No scanners are installed on this server."}
+    if "all" not in tools:
+        tools = [t for t in tools if t in installed_ids]
+        if not tools:
+            return {"error": "None of the selected tools are available on this server."}
     try:
         guard_url("http://" + body.target.strip().replace("https://", "").replace("http://", ""))
     except TargetError as e:
         return {"error": str(e)}
     jid = jobs.create("tool", body.target.strip())
-    jobs.run_in_thread(run_tool_job, jid, body.tool, body.target.strip())
+    jobs.run_in_thread(run_tool_job, jid, tools, body.target.strip())
     return {"job_id": jid}
 
 

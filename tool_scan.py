@@ -261,12 +261,15 @@ def run_tool(tool_id, target):
     return findings, {"tool": tool_id, "tool_name": tool["name"], "returncode": proc.returncode}
 
 
-def run_all(target, log=None):
-    """Run EVERY installed tool against one target and merge (dedup) the findings — the
-    'complete picture' from one URL. `log(msg)` is an optional progress callback."""
+def run_tools(target, tool_ids, log=None):
+    """Run the chosen installed tools against one target and merge (dedup) the findings.
+    `tool_ids` may include 'all' (= every installed tool). `log(msg)` is an optional callback."""
+    if not tool_ids or "all" in tool_ids:
+        tool_ids = list(TOOLS.keys())
     merged, ran = [], []
-    for tid, t in TOOLS.items():
-        if not shutil.which(t["binary"]):
+    for tid in tool_ids:
+        t = TOOLS.get(tid)
+        if not t or not shutil.which(t["binary"]):
             continue
         if log:
             log(f"Running {t['name']} …")
@@ -287,8 +290,9 @@ def run_all(target, log=None):
     return out, ran
 
 
-def run_tool_job(job_id, tool_id, target):
-    """Thread body: run one real tool, map to findings, score, and persist as a web scan."""
+def run_tool_job(job_id, tools, target):
+    """Thread body: run the chosen tool(s), merge to findings, score, persist as a web scan.
+    `tools` is a list of tool ids (may be ['all'])."""
     import time
     import jobs
     import scoring
@@ -298,36 +302,26 @@ def run_tool_job(job_id, tool_id, target):
         def _log(msg):
             _logbuf.append(msg); jobs.set_log(job_id, list(_logbuf))
 
-        if tool_id == "all":  # full scan: every installed tool, merged
-            if not ENABLED:
-                jobs.fail(job_id, "Live tools are disabled on this server (set ENABLE_LIVE_TOOLS=1).")
-                return
-            try:
-                guard_url("http://" + _host_of(target))
-            except TargetError as e:
-                jobs.fail(job_id, str(e)); return
-            _log(f"Full scan of {target} — running all installed tools…")
-            findings, ran = run_all(target, log=_log)
-            tool_name = "Full scan (" + ", ".join(ran) + ")" if ran else "Full scan"
-            meta = {"tool": "all", "tool_name": tool_name}
-        else:
-            _log(f"Running {TOOLS.get(tool_id, {}).get('name', tool_id)} against {target} … (up to {TIMEOUT}s)")
-            try:
-                findings, meta = run_tool(tool_id, target)
-            except subprocess.TimeoutExpired:
-                jobs.fail(job_id, f"{tool_id} timed out after {TIMEOUT}s.")
-                return
-            except (TargetError, ValueError) as e:
-                jobs.fail(job_id, str(e))
-                return
+        if not ENABLED:
+            jobs.fail(job_id, "Live tools are disabled on this server (set ENABLE_LIVE_TOOLS=1).")
+            return
+        try:
+            guard_url("http://" + _host_of(target))
+        except TargetError as e:
+            jobs.fail(job_id, str(e)); return
+
+        _log(f"Scanning {target} with {len(tools) if 'all' not in tools and tools else 'all'} tool(s)…")
+        findings, ran = run_tools(target, tools, log=_log)
+        tool_name = ran[0] if len(ran) == 1 else f"Multi-tool scan ({', '.join(ran)})" if ran else "Tool scan"
+        parser_tag = ran[0].lower() if len(ran) == 1 else "multi"
 
         if not findings:
             findings = [_f("No issues reported", target, "Info", "recon",
-                           "The tool(s) ran and returned no parseable findings.", "tool:" + tool_id)]
+                           "The tool(s) ran and returned no parseable findings.", "tool:scan")]
         rep = {
-            "name": f"{meta['tool_name']}: {target}", "findings": findings, "fixes": [],
-            "false_positives": [], "security": None, "parser": "tool:" + tool_id,
-            "scan": {"target": target, "tool": tool_id, "tool_name": meta["tool_name"]},
+            "name": f"{tool_name}: {target}", "findings": findings, "fixes": [],
+            "false_positives": [], "security": None, "parser": "tool:" + parser_tag,
+            "scan": {"target": target, "tools": ran, "tool_name": tool_name},
         }
         sc = scoring.score_findings(findings)
         record = {
@@ -335,8 +329,8 @@ def run_tool_job(job_id, tool_id, target):
             "reports": [rep], "correlation": None, "graph": None, "exec_summary": "",
             "score": sc["score"],
             "meta": {"created": time.time(), "module": "web", "target": target,
-                     "score": sc["score"], "band": sc["band"], "engine": meta["tool_name"],
-                     "tool": tool_id},
+                     "score": sc["score"], "band": sc["band"], "engine": tool_name,
+                     "tools": ran},
         }
         get_store().save(record)
         _log(f"✓ complete — {len(findings)} finding(s), score {sc['score']} ({sc['band']})")

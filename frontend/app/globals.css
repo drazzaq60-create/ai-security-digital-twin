@@ -239,6 +239,12 @@ html, body { margin: 0; padding: 0; color: var(--text);
 .ai-select { width: 100%; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
   color: var(--text); padding: 9px 10px; font-family: inherit; font-size: 12.5px; }
 .ai-hint { font-size: 11.5px; color: var(--muted); margin-top: 8px; line-height: 1.4; }
+.tool-pick { margin-top: 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); padding: 10px 12px; }
+.tool-pick-head { display: flex; align-items: center; justify-content: space-between; font-size: 11px;
+  text-transform: uppercase; letter-spacing: .5px; color: var(--muted); font-weight: 700; margin-bottom: 8px; }
+.tool-opt { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; font-size: 12px; color: var(--muted); cursor: pointer; line-height: 1.4; }
+.tool-opt input { margin-top: 2px; accent-color: var(--mint); width: 14px; height: 14px; flex-shrink: 0; }
+.tool-opt b { color: var(--text); }
 .run { width: 100%; margin-top: 20px; background: linear-gradient(90deg, var(--mint), #38bdf8);
   color: #04121a; border: none; border-radius: 10px; padding: 13px; font-weight: 800; font-size: 15px;
   cursor: pointer; letter-spacing: .3px; box-shadow: 0 8px 24px rgba(34,211,238,.3); transition: filter .12s, transform .12s; }
