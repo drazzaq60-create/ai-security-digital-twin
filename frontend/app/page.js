@@ -1053,10 +1053,12 @@ export default function Home() {
                   setSelectedTools(selectedTools.length === inst.length ? [] : inst);
                 }}>{selectedTools.length === (toolsCatalog?.tools || []).filter((t) => t.installed).length ? "clear all" : "select all"}</button>
               </div>
-              {(toolsCatalog?.tools || []).filter((t) => t.installed).map((t) => (
-                <label key={t.id} className="tool-opt">
-                  <input type="checkbox" checked={selectedTools.includes(t.id)} onChange={() => toggleTool(t.id)} />
-                  <span><b>{t.name}</b> — {t.desc}</span>
+              {(toolsCatalog?.tools || []).map((t) => (
+                <label key={t.id} className={`tool-opt ${t.installed ? "" : "soon"}`}>
+                  <input type="checkbox" disabled={!t.installed}
+                    checked={t.installed && selectedTools.includes(t.id)}
+                    onChange={() => t.installed && toggleTool(t.id)} />
+                  <span><b>{t.name}</b>{!t.installed && <span className="soon-badge">coming soon</span>} — {t.desc}</span>
                 </label>
               ))}
             </div>
