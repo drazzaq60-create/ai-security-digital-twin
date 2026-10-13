@@ -52,7 +52,11 @@ def _nmap_parse(stdout, host):
 
 def _nuclei_cmd(target):
     url = target if target.startswith(("http://", "https://")) else "https://" + target
-    return ["nuclei", "-u", url, "-jsonl", "-silent"]
+    # Bound it: skip the huge 'info' template set (tech-detect etc.), focus on real-severity
+    # findings, tighten timeouts/concurrency so a scan finishes well within the tool timeout.
+    return ["nuclei", "-u", url, "-jsonl", "-silent",
+            "-severity", "low,medium,high,critical",
+            "-timeout", "6", "-retries", "1", "-c", "40", "-rl", "200"]
 
 
 def _nuclei_parse(stdout, host):

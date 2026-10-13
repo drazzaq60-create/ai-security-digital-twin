@@ -11,12 +11,13 @@ load_dotenv()
 # --- Chat models: rotate through these; each has its OWN separate free quota ---
 # Default order favours the more capable models (used for reasoning-heavy tasks
 # like correlation).
+# The "-latest" aliases always resolve to the current flash model, so this list never
+# goes stale when Google rotates versions; the pinned 3.5 models are explicit fallbacks.
 GEMINI_MODELS = [
-    "gemini-3.6-flash",
-    "gemini-3.7-flash",
+    "gemini-flash-latest",
     "gemini-3.5-flash",
+    "gemini-flash-lite-latest",
     "gemini-3.5-flash-lite",
-    "gemini-2.5-flash",
 ]
 
 # Fast order: lightweight-first, for high-volume structured tasks (report parsing,
@@ -24,11 +25,10 @@ GEMINI_MODELS = [
 # first attempt usually succeeds instead of waiting through the SDK's retry/backoff
 # on a busy heavier model.
 FAST_MODELS = [
+    "gemini-flash-lite-latest",
     "gemini-3.5-flash-lite",
-    "gemini-3.6-flash",
-    "gemini-3.7-flash",
+    "gemini-flash-latest",
     "gemini-3.5-flash",
-    "gemini-2.5-flash",
 ]
 
 # --- Embedding models: turn text into search vectors (no local download needed) ---
