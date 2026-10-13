@@ -16,6 +16,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import time
 import uuid
 from typing import List, Optional
@@ -322,6 +323,83 @@ def ai_scan_status(job_id: str):
     import jobs
     j = jobs.get(job_id)
     return j if j is not None else {"error": "not found"}
+
+
+class ListModelsBody(BaseModel):
+    url: str = ""                 # the chat endpoint the user entered
+    api_key: str = ""
+    preset: str = "openai"
+
+
+def _pick_default_model(ids):
+    """Prefer a small/cheap *chat* model — the red-team fires many calls, so default to the
+    least expensive sensible option and skip non-chat models (embeddings, audio, image, etc.)."""
+    if not ids:
+        return ""
+    # Models that aren't plain text chat (or are specialised) — never a good default.
+    bad = ("embed", "whisper", "tts", "audio", "image", "vision", "moderation", "rerank", "rank",
+           "ocr", "guard", "computer-use", "deep-research", "antigravity", "aqa", "realtime",
+           "-live", "native-audio", "search", "veo", "imagen")
+    usable = [m for m in ids if not any(b in m.lower() for b in bad)] or ids
+
+    def score(m):
+        # Match cheap/big hints as whole TOKENS, not substrings — otherwise "gemini" matches
+        # "mini" and every Gemini model looks cheap.
+        tokens = set(re.split(r"[/\-_.\s]+", m.lower()))
+        low = m.lower()
+        s = 0.0
+        if tokens & {"flash", "mini", "lite", "haiku", "nano", "small", "8b"}:
+            s -= 10          # strongly prefer explicitly cheap/small chat models
+        if tokens & {"pro", "opus", "ultra", "large", "70b", "405b", "max", "turbo"}:
+            s += 6           # avoid big/expensive models
+        if any(h in low for h in ("preview", "experimental", "beta", "customtools", "thinking")):
+            s += 3           # avoid preview/experimental/dated variants
+        s += len(m) * 0.01   # tiebreak: shorter, plainer id
+        return s
+
+    return min(usable, key=score)
+
+
+@app.post("/list-models")
+async def list_models(body: ListModelsBody):
+    """Fetch the models an OpenAI-compatible API exposes (GET {base}/models), so the UI can
+    show a dropdown instead of a blank field. Server-side (avoids browser CORS, keeps the key
+    off the page origin) and SSRF-guarded. The key is used for this call only, never stored."""
+    url = (body.url or "").strip()
+    if not url:
+        return {"models": [], "error": "Enter the API URL first."}
+    if (body.preset or "openai") != "openai":
+        return {"models": [], "error": "Auto-listing models is only supported for OpenAI-compatible APIs."}
+    # Derive the models endpoint from the chat endpoint (…/chat/completions -> …/models).
+    base = re.sub(r"/chat/completions/?$", "", url)
+    base = re.sub(r"/completions/?$", "", base)
+    models_url = base.rstrip("/") + "/models"
+
+    from target_client import guard_url, TargetError
+    try:
+        guard_url(models_url)                 # same SSRF policy as every outbound target call
+    except TargetError as e:
+        return {"models": [], "error": str(e)}
+
+    def _fetch():
+        import urllib.request
+        headers = {"Accept": "application/json"}
+        if body.api_key.strip():
+            headers["Authorization"] = f"Bearer {body.api_key.strip()}"
+        req = urllib.request.Request(models_url, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8", "ignore"))
+        items = data.get("data") if isinstance(data, dict) else data   # OpenAI: {"data":[{id},…]}
+        ids = [it.get("id") for it in (items or []) if isinstance(it, dict) and it.get("id")]
+        return sorted(set(ids))
+
+    try:
+        ids = await run_in_threadpool(_fetch)
+    except Exception as e:
+        return {"models": [], "error": f"Couldn't fetch models: {e}"}
+    if not ids:
+        return {"models": [], "error": "The API returned no models."}
+    return {"models": ids, "default": _pick_default_model(ids)}
 
 
 @app.get("/tools")

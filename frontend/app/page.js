@@ -234,7 +234,10 @@ export default function Home() {
   const [aiEndpointUrl, setAiEndpointUrl] = useState("");
   const [aiPreset, setAiPreset] = useState("openai");              // openai | custom
   const [aiApiKey, setAiApiKey] = useState("");
-  const [aiModel, setAiModel] = useState("gpt-4o-mini");
+  const [aiModel, setAiModel] = useState("");
+  const [aiModels, setAiModels] = useState([]);        // models fetched from the API (dropdown)
+  const [aiModelsLoading, setAiModelsLoading] = useState(false);
+  const [aiModelsError, setAiModelsError] = useState("");
   const [aiBodyTemplate, setAiBodyTemplate] = useState('{"messages":[{"role":"user","content":"{{prompt}}"}]}');
   const [aiResponsePath, setAiResponsePath] = useState("choices.0.message.content");
   const [aiTargetRules, setAiTargetRules] = useState("");
@@ -498,6 +501,35 @@ export default function Home() {
 
   // AI red-team: start a background job on the backend, then poll it, streaming the
   // agent's live attack log into the console until it finishes.
+  // Ask the backend to list the models the user's API exposes, so Model becomes a dropdown
+  // (auto-selecting a low-cost one) instead of a blank field. Called when the URL/key blur.
+  async function fetchModels() {
+    const url = aiEndpointUrl.trim();
+    if (!url || !/^https?:\/\//i.test(url) || aiPreset !== "openai") return;
+    setAiModelsLoading(true); setAiModelsError("");
+    try {
+      const res = await fetch(`${API_URL}/list-models`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, api_key: aiApiKey.trim(), preset: aiPreset }),
+      });
+      const d = await res.json();
+      if (d.models && d.models.length) {
+        setAiModels(d.models);
+        // keep the user's pick if it's still valid, else use the suggested low-cost default
+        setAiModel((prev) => (prev && d.models.includes(prev) ? prev : (d.default || d.models[0])));
+        setAiModelsError("");
+      } else {
+        setAiModels([]);
+        setAiModelsError(d.error || "No models found — type the model name manually.");
+      }
+    } catch (e) {
+      setAiModels([]);
+      setAiModelsError("Couldn't reach the API to list models — type the model name manually.");
+    } finally {
+      setAiModelsLoading(false);
+    }
+  }
+
   async function runAiScan() {
     const sp = aiSystemPrompt.trim();
     const isEndpoint = aiTargetMode === "endpoint";
@@ -508,6 +540,7 @@ export default function Home() {
     if (isEndpoint) {
       if (!aiEndpointUrl.trim()) { setError("Enter the chatbot API URL."); return; }
       if (!/^https?:\/\//i.test(aiEndpointUrl.trim())) { setError("API URL must start with http:// or https://"); return; }
+      if (aiPreset === "openai" && !aiModel.trim()) { setError("Pick or enter the model to test."); return; }
     } else if (!sp) { setError("Paste the target app's system prompt."); return; }
     if (!aiAuthorized) { setError("Confirm you're authorized to test this target."); return; }
     if (aiCategories.length === 0) { setError("Pick at least one attack category."); return; }
@@ -533,7 +566,7 @@ export default function Home() {
       if (isEndpoint) {
         const endpoint = { url: aiEndpointUrl.trim(), preset: aiPreset };
         if (aiApiKey.trim()) endpoint.api_key = aiApiKey.trim();
-        if (aiPreset === "openai") endpoint.model = aiModel.trim() || "gpt-4o-mini";
+        if (aiPreset === "openai") endpoint.model = aiModel.trim();
         else { endpoint.body_template = aiBodyTemplate; endpoint.response_path = aiResponsePath.trim(); }
         payload.endpoint = endpoint;
         payload.target_rules = aiTargetRules;
@@ -1164,18 +1197,31 @@ export default function Home() {
 
           <div className="side-label">Chatbot API URL</div>
           <input className="scan-input" placeholder="https://api.your-bot.com/v1/chat/completions"
-            value={aiEndpointUrl} onChange={(e) => setAiEndpointUrl(e.target.value)} />
+            value={aiEndpointUrl} onChange={(e) => setAiEndpointUrl(e.target.value)} onBlur={fetchModels} />
           <p className="field-hint">The <b>chat API endpoint</b> your bot answers on — the URL you'd POST a message to, usually ending in <code>/chat/completions</code>. <b>Not a website homepage</b> (e.g. <code>https://mysite.com/</code> returns a web page, not a bot reply). Public hosts only; internal addresses are blocked.</p>
 
           <div className="side-label">API key (optional)</div>
-          <input className="scan-input" type="password" placeholder="sk-… (sent as a Bearer token)"
-            value={aiApiKey} onChange={(e) => setAiApiKey(e.target.value)} />
-          <p className="field-hint">If your API needs a key, paste it. It's sent to your bot only and <b>never saved</b>.</p>
+          <input className="scan-input" type="password" placeholder="Paste your API key if it needs one"
+            value={aiApiKey} onChange={(e) => setAiApiKey(e.target.value)} onBlur={fetchModels} />
+          <p className="field-hint">If your API needs a key, paste it. It's sent to your bot only (to list its models and run the test) and <b>never saved</b>.</p>
 
-          <div className="side-label">Model</div>
-          <input className="scan-input" placeholder="gpt-4o-mini"
-            value={aiModel} onChange={(e) => setAiModel(e.target.value)} />
-          <p className="field-hint">The model name your API expects — e.g. <code>gpt-4o-mini</code>, <code>llama-3.3-70b</code>, or your fine-tuned model id.</p>
+          <div className="side-label">Model {aiModelsLoading && <span className="muted">— fetching your models…</span>}</div>
+          {aiModels.length > 0 ? (
+            <div className="model-row">
+              <select className="ai-select" value={aiModel} onChange={(e) => setAiModel(e.target.value)}>
+                {aiModels.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <button type="button" className="model-refresh" onClick={fetchModels} title="Refresh model list">↻</button>
+            </div>
+          ) : (
+            <input className="scan-input" placeholder="Enter URL + key above to load models — or type a model name"
+              value={aiModel} onChange={(e) => setAiModel(e.target.value)} onBlur={fetchModels} />
+          )}
+          <p className="field-hint">
+            {aiModels.length > 0
+              ? `${aiModels.length} models found on your API — a low-cost one is pre-selected (the red-team makes many calls). Pick another, or ↻ to refresh.`
+              : (aiModelsError || "Enter your API URL (and key, if any) above — we'll fetch the models it offers into a dropdown and pick a working one. You can also just type the model name.")}
+          </p>
 
           <div className="side-label">What should it never do? (optional)</div>
           <textarea className="focus" rows={2}
