@@ -228,6 +228,45 @@ async def scan(body: ScanBody):
     }
 
 
+class WebReportBody(BaseModel):
+    target: str = ""
+    findings: List[dict] = []
+    scan: Optional[dict] = None
+
+
+@app.post("/web-report")
+async def web_report(body: WebReportBody):
+    """Comprehensive LLM-written report for the built-in Quick web scan, so every scan type
+    (Quick scan, real-tool scan, AI red-team) produces the same professional write-up. The
+    frontend calls this after the findings render; failure here is non-fatal (findings stand)."""
+    if not body.findings:
+        return {"report_md": ""}
+
+    def _build():
+        from tool_report import build_comprehensive_report
+        checks = (body.scan or {}).get("checks") or []
+        # Synthesise one "tool" raw block from the scan so the report has ground truth to cite.
+        raw_lines = [f"Built-in light web scan of {body.target} — checks performed: "
+                     + (", ".join(checks) or "tls, http-headers, ports"),
+                     "Non-intrusive: TLS/cert, HTTP security headers, and common-port "
+                     "reachability only. No exploitation or fuzzing.", ""]
+        for f in body.findings:
+            raw_lines.append(f"[{f.get('severity')}] {f.get('name')} — {f.get('evidence')}")
+        raw_by_tool = [{"tool_name": "Built-in web scan (TLS / security headers / ports)",
+                        "returncode": 0, "ok": True, "raw": "\n".join(raw_lines), "note": ""}]
+        return build_comprehensive_report(
+            body.target or "target",
+            ["Built-in light web scan (TLS, security headers, common-port reachability)"],
+            body.findings, raw_by_tool, [],
+        )
+
+    try:
+        md = await run_in_threadpool(_build)
+    except Exception as e:
+        return {"report_md": "", "error": str(e)}
+    return {"report_md": (md or "").strip()}
+
+
 class AIScanBody(BaseModel):
     system_prompt: str = ""       # simulated mode: the target's own rules (what we red-team)
     target_name: str = "Target LLM app"
@@ -238,6 +277,7 @@ class AIScanBody(BaseModel):
     target_mode: str = "simulated"        # simulated | endpoint
     endpoint: Optional[dict] = None       # endpoint mode: {url, preset, api_key, model, headers, body_template, response_path}
     target_rules: str = ""                # endpoint mode: optional description of the bot's rules (for the judge)
+    extra_instructions: str = ""          # optional: user guidance the attacker uses to tailor attempts
 
 
 @app.post("/scans/ai")
@@ -271,7 +311,8 @@ def start_ai_scan(body: AIScanBody):
     max_per = max(1, min(body.max_per_category, 5))
     jid = jobs.create("ai", body.target_name)
     jobs.run_in_thread(run_ai_scan, jid, body.system_prompt, body.target_name,
-                       body.categories, budget, max_per, endpoint, body.target_rules)
+                       body.categories, budget, max_per, endpoint, body.target_rules,
+                       body.extra_instructions)
     return {"job_id": jid}
 
 

@@ -71,7 +71,7 @@ GENERIC_TARGET_RULES = (
 
 
 def run_ai_scan(job_id, system_prompt, target_name, categories, budget, max_per_category,
-                target_endpoint=None, target_rules=""):
+                target_endpoint=None, target_rules="", extra_instructions=""):
     """Thread body: stream the agent, update the job, then map + score + persist.
 
     target_endpoint None -> simulated (system prompt on our model);
@@ -87,6 +87,7 @@ def run_ai_scan(job_id, system_prompt, target_name, categories, budget, max_per_
             "target_name": target_name, "system_prompt": judge_rules,
             "budget": budget, "max_per_category": max_per_category,
             "categories": cats, "target_endpoint": target_endpoint, "log": [],
+            "extra_instructions": (extra_instructions or "").strip(),
         }
 
         report = None
