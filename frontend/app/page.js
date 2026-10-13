@@ -608,9 +608,30 @@ export default function Home() {
         if (pr.status === "error") { setError(pr.error || "scan failed"); logLine(`✗ ${pr.error}`, "err"); break; }
         if (pr.status === "done") {
           const r = pr.result || {};
-          if (r.report) setReports([r.report]);
-          logLine(`✓ Tool scan complete — ${r.findings} finding(s), score ${r.score} (${r.band}).`, "done");
-          loadRuns(); setNav("overview"); toast(`Tool scan complete`, "ok"); break;
+          // One report PER TOOL (fall back to the old single-report shape for safety).
+          const reps = (r.reports && r.reports.length) ? r.reports : (r.report ? [r.report] : []);
+          setReports(reps);
+          logLine(`✓ Tools ran (${(r.tools || []).join(", ") || "none"}) — ${r.findings || 0} finding(s) total.`, "done");
+
+          // Per-tool prioritized fixes + false positives — the same LLM step each uploaded
+          // report gets. Runs concurrently; one tool's failure never blocks the others.
+          await Promise.all(reps.map(async (rep) => {
+            if (!(rep.findings || []).length) return;
+            try {
+              const rRes = await fetchStage(`${API_URL}/report-fixes`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: rep.name, findings: rep.findings, focus: message }),
+              }, ac.signal);
+              if (rRes.ok) { const d = await rRes.json(); rep.fixes = d.fixes || []; rep.false_positives = d.false_positives || []; }
+            } catch (e) { rep.fixesFailed = true; logLine(`✗ fixes failed for ${rep.name}: ${errMsg(e)}`, "err"); }
+          }));
+          setReports([...reps]);
+
+          if (ac.signal.aborted) { logLine("Cancelled.", "err"); break; }
+          // Cross-tool correlation + attack-surface graph + save — identical to the upload flow.
+          await finishPipeline(reps, ac.signal, "web", target);
+          toast(`Tool scan complete`, "ok");
+          break;
         }
       }
     } catch (e) {

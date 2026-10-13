@@ -266,42 +266,13 @@ def run_tool(tool_id, target):
     return findings, {"tool": tool_id, "tool_name": tool["name"], "returncode": proc.returncode}
 
 
-def run_tools(target, tool_ids, log=None):
-    """Run the chosen installed tools against one target and merge (dedup) the findings.
-    `tool_ids` may include 'all' (= every installed tool). `log(msg)` is an optional callback."""
-    if not tool_ids or "all" in tool_ids:
-        tool_ids = list(TOOLS.keys())
-    merged, ran = [], []
-    for tid in tool_ids:
-        t = TOOLS.get(tid)
-        if not t or not shutil.which(t["binary"]):
-            continue
-        if log:
-            log(f"Running {t['name']} …")
-        try:
-            f, _ = run_tool(tid, target)
-            merged += f
-            ran.append(t["name"])
-        except Exception as e:
-            if log:
-                log(f"  {t['name']} skipped: {e}")
-    seen, out = set(), []
-    for f in merged:
-        k = (f["name"], f["host"], f["source"])
-        if k in seen:
-            continue
-        seen.add(k)
-        out.append(f)
-    return out, ran
-
-
 def run_tool_job(job_id, tools, target):
-    """Thread body: run the chosen tool(s), merge to findings, score, persist as a web scan.
-    `tools` is a list of tool ids (may be ['all'])."""
-    import time
+    """Thread body: run each chosen tool against the target and return ONE report PER TOOL
+    (not merged), so the UI can show each tool's findings separately and then correlate
+    across them — the same per-report → cross-report pipeline the file-upload flow uses.
+    `tools` is a list of tool ids (may be ['all']). Fixes/correlation/graph/save are done
+    by the frontend afterwards, exactly as for uploads."""
     import jobs
-    import scoring
-    from store import get_store, new_id
     try:
         _logbuf = []
         def _log(msg):
@@ -315,31 +286,34 @@ def run_tool_job(job_id, tools, target):
         except TargetError as e:
             jobs.fail(job_id, str(e)); return
 
-        _log(f"Scanning {target} with {len(tools) if 'all' not in tools and tools else 'all'} tool(s)…")
-        findings, ran = run_tools(target, tools, log=_log)
-        tool_name = ran[0] if len(ran) == 1 else f"Multi-tool scan ({', '.join(ran)})" if ran else "Tool scan"
-        parser_tag = ran[0].lower() if len(ran) == 1 else "multi"
+        tool_ids = list(TOOLS.keys()) if (not tools or "all" in tools) else tools
+        host = _host_of(target)
+        reports, ran, total = [], [], 0
+        _log(f"Scanning {target} …")
+        for tid in tool_ids:
+            t = TOOLS.get(tid)
+            if not t or not shutil.which(t["binary"]):
+                continue
+            _log(f"Running {t['name']} …")
+            try:
+                findings, _ = run_tool(tid, target)
+            except Exception as e:
+                _log(f"  {t['name']} skipped: {e}")
+                continue
+            ran.append(t["name"]); total += len(findings)
+            _log(f"  {t['name']}: {len(findings)} finding(s)" if findings else f"  {t['name']}: no findings")
+            reports.append({
+                "name": f"{t['name']} — {host}",
+                "findings": findings, "fixes": [], "false_positives": [],
+                "status": "ok" if findings else "empty", "error": "", "security": None,
+                "parser": f"tool:{tid}",
+                "scan": {"target": target, "tool": tid, "tool_name": t["name"]},
+            })
 
-        if not findings:
-            findings = [_f("No issues reported", target, "Info", "recon",
-                           "The tool(s) ran and returned no parseable findings.", "tool:scan")]
-        rep = {
-            "name": f"{tool_name}: {target}", "findings": findings, "fixes": [],
-            "false_positives": [], "security": None, "parser": "tool:" + parser_tag,
-            "scan": {"target": target, "tools": ran, "tool_name": tool_name},
-        }
-        sc = scoring.score_findings(findings)
-        record = {
-            "_id": new_id(), "_created": time.time(), "module": "web", "target": target,
-            "reports": [rep], "correlation": None, "graph": None, "exec_summary": "",
-            "score": sc["score"],
-            "meta": {"created": time.time(), "module": "web", "target": target,
-                     "score": sc["score"], "band": sc["band"], "engine": tool_name,
-                     "tools": ran},
-        }
-        get_store().save(record)
-        _log(f"✓ complete — {len(findings)} finding(s), score {sc['score']} ({sc['band']})")
-        jobs.finish(job_id, {"run_id": record["_id"], "report": rep,
-                             "score": sc["score"], "band": sc["band"], "findings": len(findings)})
+        if not reports:
+            jobs.fail(job_id, "None of the selected tools are installed/available on this server.")
+            return
+        _log(f"✓ scan complete — {total} finding(s) across {len(ran)} tool(s): {', '.join(ran)}")
+        jobs.finish(job_id, {"reports": reports, "tools": ran, "findings": total})
     except Exception as e:
         jobs.fail(job_id, f"{type(e).__name__}: {e}")
