@@ -1197,11 +1197,13 @@ export default function Home() {
 
           <div className="side-label">Chatbot API URL</div>
           <input className="scan-input" placeholder="https://api.your-bot.com/v1/chat/completions"
+            name="sx-api-url" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} inputMode="url"
             value={aiEndpointUrl} onChange={(e) => setAiEndpointUrl(e.target.value)} onBlur={fetchModels} />
           <p className="field-hint">The <b>chat API endpoint</b> your bot answers on — the URL you'd POST a message to, usually ending in <code>/chat/completions</code>. <b>Not a website homepage</b> (e.g. <code>https://mysite.com/</code> returns a web page, not a bot reply). Public hosts only; internal addresses are blocked.</p>
 
           <div className="side-label">API key (optional)</div>
           <input className="scan-input" type="password" placeholder="Paste your API key if it needs one"
+            name="sx-api-key" autoComplete="new-password" autoCorrect="off" autoCapitalize="off" spellCheck={false}
             value={aiApiKey} onChange={(e) => setAiApiKey(e.target.value)} onBlur={fetchModels} />
           <p className="field-hint">If your API needs a key, paste it. It's sent to your bot only (to list its models and run the test) and <b>never saved</b>.</p>
 
@@ -1215,6 +1217,7 @@ export default function Home() {
             </div>
           ) : (
             <input className="scan-input" placeholder="Enter URL + key above to load models — or type a model name"
+              name="sx-model" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
               value={aiModel} onChange={(e) => setAiModel(e.target.value)} onBlur={fetchModels} />
           )}
           <p className="field-hint">
