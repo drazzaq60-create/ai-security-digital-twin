@@ -218,10 +218,31 @@ TOOLS = {
 }
 
 
+def _nuclei_ready():
+    """Nuclei's binary is useless without templates; treat it as available only when some exist."""
+    base = os.path.join(os.path.expanduser("~"), "nuclei-templates")
+    if not os.path.isdir(base):
+        return False
+    for _root, _dirs, files in os.walk(base):
+        if any(f.endswith(".yaml") for f in files):
+            return True
+    return False
+
+
+def _available(tool_id, binary):
+    """A tool is usable only if its binary is present AND any runtime prerequisites are met
+    (e.g. Nuclei needs its templates). Prevents offering a tool that would just fail."""
+    if not shutil.which(binary):
+        return False
+    if tool_id == "nuclei":
+        return _nuclei_ready()
+    return True
+
+
 def list_tools():
     """Return the tool catalog with install/availability status (for the UI)."""
     tools = [{"id": tid, "name": t["name"], "desc": t["desc"],
-              "installed": bool(shutil.which(t["binary"]))} for tid, t in TOOLS.items()]
+              "installed": _available(tid, t["binary"])} for tid, t in TOOLS.items()]
     return {"enabled": ENABLED, "tools": tools}
 
 
@@ -237,7 +258,9 @@ def run_tool(tool_id, target):
     tool = TOOLS.get(tool_id)
     if not tool:
         raise ValueError(f"Unknown tool: {tool_id}")
-    if not shutil.which(tool["binary"]):
+    if not _available(tool_id, tool["binary"]):
+        if tool_id == "nuclei" and shutil.which(tool["binary"]):
+            raise ValueError("Nuclei has no templates yet (run `nuclei -update-templates`).")
         raise ValueError(f"{tool['name']} is not installed on this server.")
     guard_url("http://" + _host_of(target))  # SSRF guard on the host
 
@@ -297,7 +320,7 @@ def run_tool_job(job_id, tools, target):
         _log(f"Scanning {target} …")
         for tid in tool_ids:
             t = TOOLS.get(tid)
-            if not t or not shutil.which(t["binary"]):
+            if not t or not _available(tid, t["binary"]):   # skip not-ready tools (e.g. nuclei w/o templates)
                 continue
             _log(f"Running {t['name']} …")
             try:
