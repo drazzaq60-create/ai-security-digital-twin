@@ -37,18 +37,32 @@ EMBED_MODELS = [
     "text-embedding-004",
 ]
 
-_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+_client = None  # lazily created so the app can boot without a key (features fail at call time)
 _embed_model = None  # remembered once we find one that works
+
+
+def _gemini_client():
+    """Create the Gemini client on first use. Raises a clear error if no key is set."""
+    global _client
+    if _client is None:
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "GEMINI_API_KEY is not set. Set it in your environment or .env to use LLM features."
+            )
+        _client = genai.Client(api_key=api_key)
+    return _client
 
 
 def call_llm(system, user, temperature=0.1, models=None):
     """Try each chat model in order; on any failure (rate limit, etc.) fall back to the next.
 
     Pass `models` (e.g. FAST_MODELS) to change the preference order per task."""
+    client = _gemini_client()
     last_error = None
     for model in (models or GEMINI_MODELS):
         try:
-            resp = _client.models.generate_content(
+            resp = client.models.generate_content(
                 model=model,
                 contents=user,
                 config=types.GenerateContentConfig(system_instruction=system, temperature=temperature),
@@ -66,9 +80,10 @@ def _pick_embed_model():
     global _embed_model
     if _embed_model:
         return _embed_model
+    client = _gemini_client()
     for m in EMBED_MODELS:
         try:
-            _client.models.embed_content(model=m, contents="test")
+            client.models.embed_content(model=m, contents="test")
             _embed_model = m
             print(f"[embed] using: {m}")
             return m
@@ -80,8 +95,9 @@ def _pick_embed_model():
 def embed_texts(texts):
     """Turn a list of texts into vectors via Gemini's API (nothing to download)."""
     model = _pick_embed_model()
+    client = _gemini_client()
     vectors = []
     for t in texts:
-        resp = _client.models.embed_content(model=model, contents=t)
+        resp = client.models.embed_content(model=model, contents=t)
         vectors.append(resp.embeddings[0].values)
     return vectors
