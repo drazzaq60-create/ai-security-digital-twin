@@ -2,11 +2,21 @@
 # LLM + embeddings layer, all via Gemini (free tier, with automatic model fallback).
 
 import os
+import time
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
 load_dotenv()
+
+# Transient API conditions worth retrying (free-tier demand spikes, rate limits) vs. a hard
+# error like 404 (model gone) which should fail straight to the next model.
+_TRANSIENT = ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "overloaded", "high demand")
+
+
+def _is_transient(e) -> bool:
+    s = str(e)
+    return any(t in s for t in _TRANSIENT)
 
 # --- Chat models: rotate through these; each has its OWN separate free quota ---
 # Default order favours the more capable models (used for reasoning-heavy tasks
@@ -61,17 +71,24 @@ def call_llm(system, user, temperature=0.1, models=None):
     client = _gemini_client()
     last_error = None
     for model in (models or GEMINI_MODELS):
-        try:
-            resp = client.models.generate_content(
-                model=model,
-                contents=user,
-                config=types.GenerateContentConfig(system_instruction=system, temperature=temperature),
-            )
-            print(f"[llm] answered with: {model}")
-            return resp.text
-        except Exception as e:
-            print(f"[llm] {model} unavailable ({type(e).__name__}) - trying next...")
-            last_error = e
+        # Retry the same model on a TRANSIENT error (503/429 demand spike) with a short
+        # backoff before falling through; a hard error (e.g. 404 model gone) moves on at once.
+        for retry in range(3):
+            try:
+                resp = client.models.generate_content(
+                    model=model,
+                    contents=user,
+                    config=types.GenerateContentConfig(system_instruction=system, temperature=temperature),
+                )
+                print(f"[llm] answered with: {model}")
+                return resp.text
+            except Exception as e:
+                last_error = e
+                if _is_transient(e) and retry < 2:
+                    time.sleep(1.5 * (retry + 1))   # 1.5s, then 3s, then try the next model
+                    continue
+                print(f"[llm] {model} unavailable ({type(e).__name__}) - trying next...")
+                break
     raise RuntimeError(f"All Gemini chat models failed. Last error: {last_error}")
 
 

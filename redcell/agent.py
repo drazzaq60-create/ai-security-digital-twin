@@ -38,6 +38,7 @@ class RedTeamState(TypedDict, total=False):
     log: List[str]
     report: Optional[RedTeamReport]
     target_endpoint: Optional[dict]   # live-API config; None = simulate on our own model
+    aborted: bool                     # attacker LLM gave out mid-run -> wrap up gracefully
 
 
 # ---------- attacker (LLM that crafts adversarial prompts) ----------
@@ -86,14 +87,24 @@ def node_generate(state: RedTeamState) -> dict:
     failed = [r.attempt.prompt for r in state["results"]
               if r.attempt.category == cat and not r.success]
     failed_str = "\n".join(f"- {p[:160]}" for p in failed) or "(none yet)"
-    raw = llm.chat(
-        _ATTACKER_SYSTEM,
-        _ATTACKER_TEMPLATE.format(
-            target_name=state["target_name"], category=cat.value,
-            guidance=describe(cat), failed=failed_str,
-        ),
-        temperature=0.9, max_tokens=500,
-    )
+    try:
+        raw = llm.chat(
+            _ATTACKER_SYSTEM,
+            _ATTACKER_TEMPLATE.format(
+                target_name=state["target_name"], category=cat.value,
+                guidance=describe(cat), failed=failed_str,
+            ),
+            temperature=0.9, max_tokens=500,
+        )
+    except Exception as e:
+        # The attacker LLM is unavailable (e.g. a sustained 503 demand spike). Rather than
+        # crash the whole scan, stop crafting new attacks and wrap up with the results we
+        # already have — the user still gets a report + transcript for completed attempts.
+        log = state["log"] + [
+            f"[{cat.value}] could not craft attack — LLM unavailable ({type(e).__name__}); "
+            f"finishing with {len(state['results'])} completed attempt(s)."
+        ]
+        return {"aborted": True, "log": log}
     data = _extract_json(raw)
     attempt = AttackAttempt(
         category=cat,
@@ -116,13 +127,25 @@ def node_execute(state: RedTeamState) -> dict:
         except TargetError as e:
             response = f"[target error: {e}]"
     else:         # simulated mode: run the target's system prompt on our own model
-        response = llm.query_target(state["system_prompt"], attempt.prompt)
+        try:
+            response = llm.query_target(state["system_prompt"], attempt.prompt)
+        except Exception as e:
+            response = f"[target error: {type(e).__name__}: {e}]"
     return {"current_response": response}
 
 
 def node_judge(state: RedTeamState) -> dict:
     attempt = state["current_attempt"]
-    result = judge_mod.judge(state["system_prompt"], attempt, state["current_response"])
+    try:
+        result = judge_mod.judge(state["system_prompt"], attempt, state["current_response"])
+    except Exception as e:
+        # The judge LLM is unavailable: record the attempt as unscored (not a false "blocked")
+        # so the transcript still shows the exchange, and keep going.
+        result = AttackResult(
+            attempt=attempt, target_response=state.get("current_response") or "",
+            success=False, severity=Severity.NONE,
+            reasoning=f"Not scored — judge LLM unavailable ({type(e).__name__}).",
+        )
     results = state["results"] + [result]
     verdict = f"SUCCESS ({result.severity.value})" if result.success else "blocked"
     log = state["log"] + [f"[{attempt.category.value}] result: {verdict}"]
@@ -135,6 +158,12 @@ def node_judge(state: RedTeamState) -> dict:
         attempts_this_cat = 0
     return {"results": results, "log": log, "cat_index": cat_index,
             "attempts_this_cat": attempts_this_cat}
+
+
+def route_after_generate(state: RedTeamState) -> str:
+    # The attacker LLM gave out mid-run: skip execute/judge and go straight to the report
+    # with whatever attempts already completed.
+    return "report" if state.get("aborted") else "execute"
 
 
 def route_after_judge(state: RedTeamState) -> str:
@@ -203,7 +232,7 @@ def build_agent():
     g.add_node("report", node_report)
     g.set_entry_point("plan")
     g.add_edge("plan", "generate")
-    g.add_edge("generate", "execute")
+    g.add_conditional_edges("generate", route_after_generate, {"execute": "execute", "report": "report"})
     g.add_edge("execute", "judge")
     g.add_conditional_edges("judge", route_after_judge, {"generate": "generate", "report": "report"})
     g.add_edge("report", END)

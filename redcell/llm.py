@@ -13,16 +13,28 @@ Groq/OpenAI are intentionally dropped for now to avoid extra deps; add back if n
 """
 from __future__ import annotations
 import os
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
 
+# Transient API conditions worth retrying (free-tier demand spikes, rate limits) vs. a hard
+# error like 404 (model gone) which should fail straight to the next model.
+_TRANSIENT = ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "overloaded", "high demand")
+
+
+def _is_transient(e) -> bool:
+    s = str(e)
+    return any(t in s for t in _TRANSIENT)
+
 PROVIDER = os.getenv("REDCELL_PROVIDER", os.getenv("LLM_PROVIDER", "gemini")).lower()
-MODEL = os.getenv("REDCELL_MODEL", "gemini-3.5-flash")
+MODEL = os.getenv("REDCELL_MODEL", "gemini-flash-latest")
 _REDCELL_KEY = os.getenv("REDCELL_GEMINI_KEY") or os.getenv("GEMINI_API_KEY")
 
-# Fallback chain if the chosen model is throttled (each has its own free quota).
-_FALLBACK = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]
+# Fallback chain if the chosen model is throttled/unavailable (each has its own free quota).
+# The "-latest" aliases always resolve to the current flash model, so this never goes stale
+# when Google rotates versions; the pinned 3.5 models are explicit fallbacks. Mirrors llm.py.
+_FALLBACK = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-flash-lite-latest", "gemini-3.5-flash-lite"]
 
 _client = None
 
@@ -41,17 +53,26 @@ def _gemini_chat(system: str, user: str, temperature: float, max_tokens: int) ->
     models = [MODEL] + [m for m in _FALLBACK if m != MODEL]
     last = None
     for m in models:
-        try:
-            resp = client.models.generate_content(
-                model=m, contents=user,
-                config=types.GenerateContentConfig(
-                    system_instruction=system, temperature=temperature,
-                    max_output_tokens=max_tokens,
-                ),
-            )
-            return resp.text or ""
-        except Exception as e:  # rate limit / model unavailable -> try next
-            last = e
+        # Retry the same model a few times on a TRANSIENT error (503/429) with a short
+        # backoff before moving on; a hard error (e.g. 404 model gone) skips straight to
+        # the next model. The red-team fires many calls in a burst, so this smooths over
+        # free-tier demand spikes instead of letting one 503 kill the whole scan.
+        for retry in range(3):
+            try:
+                resp = client.models.generate_content(
+                    model=m, contents=user,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system, temperature=temperature,
+                        max_output_tokens=max_tokens,
+                    ),
+                )
+                return resp.text or ""
+            except Exception as e:
+                last = e
+                if _is_transient(e) and retry < 2:
+                    time.sleep(1.5 * (retry + 1))   # 1.5s, then 3s, then give up on this model
+                    continue
+                break
     raise RuntimeError(f"RedCell: all Gemini models failed. Last error: {last}")
 
 

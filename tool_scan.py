@@ -233,9 +233,19 @@ def _nuclei_ready():
     return False
 
 
+# Tools that behave well on Windows. Nuclei is pathologically slow loading its ~14k-template
+# tree on Windows (scans blow past the timeout and return nothing) and Wapiti is flaky here;
+# the TLS/web tools (sslscan, nikto, whatweb, testssl) are POSIX-only. So on Windows we offer
+# ONLY Nmap and show everything else as "coming soon". The full suite lights up automatically
+# on a Linux self-host / deploy, where these binaries actually work.
+WINDOWS_OK = {"nmap"}
+
+
 def _available(tool_id, binary):
     """A tool is usable only if its binary is present AND any runtime prerequisites are met
     (e.g. Nuclei needs its templates). Prevents offering a tool that would just fail."""
+    if os.name == "nt" and tool_id not in WINDOWS_OK:
+        return False  # Windows: only Nmap is reliable; the rest show as "coming soon"
     if not shutil.which(binary):
         return False
     if tool_id == "nuclei":
