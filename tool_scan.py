@@ -266,15 +266,15 @@ def run_tool(tool_id, target):
     return findings, {"tool": tool_id, "tool_name": tool["name"],
                       "returncode": proc.returncode,
                       "stderr": (proc.stderr or "").strip()[:600],
-                      "empty_output": not (output or "").strip()}
+                      "empty_output": not (output or "").strip(),
+                      "raw": (output or "").strip()}  # full tool output (appendix + LLM context)
 
 
 def run_tool_job(job_id, tools, target):
-    """Thread body: run each chosen tool against the target and return ONE report PER TOOL
-    (not merged), so the UI can show each tool's findings separately and then correlate
-    across them — the same per-report → cross-report pipeline the file-upload flow uses.
-    `tools` is a list of tool ids (may be ['all']). Fixes/correlation/graph/save are done
-    by the frontend afterwards, exactly as for uploads."""
+    """Thread body: run each chosen tool against the target, keep each tool's FULL raw
+    output, then have the LLM synthesise ONE comprehensive pentest-style report from all
+    the findings + raw output. Returns a single merged report (findings + report markdown
+    + per-tool raw appendix). `tools` is a list of tool ids (may be ['all'])."""
     import jobs
     try:
         _logbuf = []
@@ -291,7 +291,9 @@ def run_tool_job(job_id, tools, target):
 
         tool_ids = list(TOOLS.keys()) if (not tools or "all" in tools) else tools
         host = _host_of(target)
-        reports, ran, total = [], [], 0
+        merged_findings = []          # all findings across tools (each keeps its source tool)
+        raw_by_tool = []              # [{tool, tool_name, raw, returncode, ok, note}]
+        ran, failed_tools = [], []
         _log(f"Scanning {target} …")
         for tid in tool_ids:
             t = TOOLS.get(tid)
@@ -301,44 +303,65 @@ def run_tool_job(job_id, tools, target):
             try:
                 findings, meta = run_tool(tid, target)
             except Exception as e:
-                # Couldn't even launch (missing binary, blocked target): a failed report,
-                # not a silent omission — otherwise the scan looks clean when it never ran.
                 _log(f"  {t['name']} could not run: {e}")
-                ran.append(t["name"])
-                reports.append({
-                    "name": f"{t['name']} — {host}", "findings": [], "fixes": [],
-                    "false_positives": [], "status": "failed", "error": str(e)[:500],
-                    "security": None, "parser": f"tool:{tid}",
-                    "scan": {"target": target, "tool": tid, "tool_name": t["name"]},
-                })
+                ran.append(t["name"]); failed_tools.append(t["name"])
+                raw_by_tool.append({"tool": tid, "tool_name": t["name"], "raw": "",
+                                    "returncode": None, "ok": False, "note": str(e)[:300]})
                 continue
-            ran.append(t["name"]); total += len(findings)
-
-            # A tool that produced no findings AND exited with an error (or emitted nothing)
-            # has FAILED — do not report that as a clean 100% result. The classic case on
-            # Windows is Nmap without Npcap: it exits in ~1s with an error and zero output.
+            ran.append(t["name"])
             rc = meta.get("returncode")
-            if not findings and (meta.get("empty_output") or (rc not in (0, None))):
-                err = meta.get("stderr") or f"{t['name']} exited with code {rc} and produced no parseable output."
-                _log(f"  ⚠ {t['name']} failed (exit {rc}): {err.splitlines()[0][:160] if err else ''}")
-                status, rep_err = "failed", err[:500]
+            # A tool with no findings AND an error/empty output has FAILED — never a clean pass
+            # (classic: Nmap without Npcap on Windows exits in ~1s with no output).
+            tool_failed = (not findings) and (meta.get("empty_output") or (rc not in (0, None)))
+            if tool_failed:
+                note = meta.get("stderr") or f"exited with code {rc}, no parseable output"
+                failed_tools.append(t["name"])
+                _log(f"  ⚠ {t['name']} failed (exit {rc}): {note.splitlines()[0][:160] if note else ''}")
             else:
                 _log(f"  {t['name']}: {len(findings)} finding(s)" if findings else f"  {t['name']}: no findings (clean)")
-                if meta.get("stderr"):
-                    _log(f"    note ({t['name']}): {meta['stderr'].splitlines()[0][:160]}")
-                status, rep_err = ("ok" if findings else "empty"), ""
-            reports.append({
-                "name": f"{t['name']} — {host}",
-                "findings": findings, "fixes": [], "false_positives": [],
-                "status": status, "error": rep_err, "security": None,
-                "parser": f"tool:{tid}",
-                "scan": {"target": target, "tool": tid, "tool_name": t["name"]},
+                merged_findings += findings
+            raw_by_tool.append({
+                "tool": tid, "tool_name": t["name"], "raw": meta.get("raw", ""),
+                "returncode": rc, "ok": not tool_failed,
+                "note": (meta.get("stderr") or "")[:300] if tool_failed else "",
             })
 
-        if not reports:
+        if not ran:
             jobs.fail(job_id, "None of the selected tools are installed/available on this server.")
             return
-        _log(f"✓ scan complete — {total} finding(s) across {len(ran)} tool(s): {', '.join(ran)}")
-        jobs.finish(job_id, {"reports": reports, "tools": ran, "findings": total})
+
+        # De-dup merged findings (same tools can report the same thing).
+        seen, deduped = set(), []
+        for f in merged_findings:
+            k = (f.get("name"), f.get("host"), f.get("source"))
+            if k in seen:
+                continue
+            seen.add(k); deduped.append(f)
+
+        # LLM: synthesise one comprehensive report from everything gathered.
+        _log("Synthesising comprehensive report (LLM)…")
+        try:
+            from tool_report import build_comprehensive_report
+            report_md = build_comprehensive_report(target, ran, deduped, raw_by_tool, failed_tools)
+            _log("  ✓ report written")
+        except Exception as e:
+            report_md = ""
+            _log(f"  ⚠ LLM report unavailable: {e}")
+
+        status = "ok" if deduped else ("failed" if failed_tools and not deduped else "empty")
+        rep = {
+            "name": f"Security scan — {host}",
+            "findings": deduped, "fixes": [], "false_positives": [],
+            "status": status,
+            "error": ("; ".join(f"{n} failed" for n in failed_tools) if (failed_tools and not deduped) else ""),
+            "security": None, "parser": "tool:multi",
+            "report_md": report_md,
+            "scan": {"target": target, "tools": ran, "failed_tools": failed_tools,
+                     "raw": raw_by_tool},
+        }
+        _log(f"✓ scan complete — {len(deduped)} finding(s) across {len(ran)} tool(s): {', '.join(ran)}"
+             + (f" ({len(failed_tools)} failed)" if failed_tools else ""))
+        jobs.finish(job_id, {"reports": [rep], "tools": ran,
+                             "findings": len(deduped), "failed_tools": failed_tools})
     except Exception as e:
         jobs.fail(job_id, f"{type(e).__name__}: {e}")

@@ -60,6 +60,56 @@ def _bullet(pdf, text, color=INK):
     pdf.multi_cell(0, 5.5, _s("  - " + text), new_x="LMARGIN", new_y="NEXT")
 
 
+def _render_markdown(pdf, md):
+    """Render the LLM report markdown into the PDF (headings, tables, bullets, bold-stripped).
+    Deliberately simple — fpdf2 core fonts, latin-1."""
+    lines = str(md or "").replace("\r\n", "\n").split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip():
+            i += 1
+            continue
+        # Table: header row of `| ... |` then a `|---|` separator.
+        if line.strip().startswith("|") and i + 1 < len(lines) and "-" in lines[i + 1] and set(lines[i + 1].strip()) <= set("|-: "):
+            cells = lambda row: [c.strip() for c in row.strip().strip("|").split("|")]
+            header = cells(line)
+            i += 2
+            rows = []
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                rows.append(cells(lines[i])); i += 1
+            pdf.set_font("Helvetica", "B", 8); pdf.set_text_color(*MUTED)
+            _p(pdf, " | ".join(header), size=8, color=MUTED)
+            pdf.set_text_color(*INK)
+            for r in rows:
+                _bullet(pdf, " | ".join(r), color=INK)
+            continue
+        h = line.lstrip("#").strip() if line.lstrip().startswith("#") else None
+        if h is not None:
+            level = len(line) - len(line.lstrip("#"))
+            _h1(pdf, _strip_md(h)) if level <= 1 else _h2(pdf, _strip_md(h))
+            i += 1
+            continue
+        if line.lstrip().startswith(("-", "*")):
+            _bullet(pdf, _strip_md(line.lstrip()[1:].strip()))
+            i += 1
+            continue
+        import re as _re
+        if _re.match(r"^\s*\d+[.)]\s+", line):
+            _bullet(pdf, _strip_md(_re.sub(r"^\s*\d+[.)]\s+", "", line)))
+            i += 1
+            continue
+        _p(pdf, _strip_md(line))
+        i += 1
+    pdf.ln(2)
+
+
+def _strip_md(text):
+    """Drop inline markdown markers (**bold**, `code`) for the plaintext PDF."""
+    import re as _re
+    return _re.sub(r"\*\*([^*]+)\*\*", r"\1", str(text)).replace("`", "")
+
+
 def build_pdf(data):
     """data = {reports:[...], correlation:{...}|None, graph:{...}|None}. Returns PDF bytes."""
     reports = data.get("reports", []) or []
@@ -86,20 +136,44 @@ def build_pdf(data):
             if line.strip():
                 _p(pdf, line)
 
-    # --- Guardrails ---
-    _h2(pdf, "Guardrails (LLM security)", color=MINT if injections == 0 else RED)
-    if injections == 0:
-        _p(pdf, "No prompt-injection detected. Reports were scanned (L1), fed to the model as "
-                "data not instructions (L2), and responses checked for hijack/leak (L3).")
-    else:
-        for r in reports:
+    # --- LLM-written comprehensive report (real-tool web scan) ---
+    report_md = next((r.get("report_md") for r in reports if r.get("report_md")), "")
+    if report_md:
+        _render_markdown(pdf, report_md)
+
+    # --- Guardrails (honest: only claim what actually ran) ---
+    def _evaluated(r):
+        s = r.get("security") or {}
+        return isinstance(s.get("injection_detected"), bool)
+
+    def _na(r):  # web/port scan or external scanner: no untrusted text reaches the LLM
+        return (not _evaluated(r)) and str(r.get("parser") or "").startswith(("live", "tool:"))
+
+    flagged = [r for r in reports if _evaluated(r) and ((r.get("security") or {}).get("injection_detected")
+                                                        or (r.get("security") or {}).get("output_ok") is False)]
+    passed = [r for r in reports if _evaluated(r) and r not in flagged]
+    na = [r for r in reports if _na(r)]
+    not_eval = [r for r in reports if not _evaluated(r) and not _na(r)]
+
+    _h2(pdf, "Guardrails (LLM security)", color=RED if flagged else (MINT if passed else MUTED))
+    if flagged:
+        for r in flagged:
             sec = r.get("security") or {}
-            if not sec.get("injection_detected"):
-                continue
             _p(pdf, f"{r.get('name','?')}: {sec.get('count',0)} attempt(s), "
                     f"max severity {sec.get('max_severity','?')} - detected and blocked.")
             for d in sec.get("detections", [])[:5]:
                 _bullet(pdf, f"{d.get('technique','?')} ({d.get('severity','?')})", color=MUTED)
+    if passed:
+        _p(pdf, f"{len(passed)} uploaded report(s) passed - scanned for injection (L1), hardened "
+                "so report text is treated as data not instructions (L2), responses checked (L3).", color=MINT)
+    if na:
+        _p(pdf, f"{len(na)} report(s) not applicable - web/port or external-scanner results don't feed "
+                "untrusted text into the LLM, so the prompt-injection guardrails don't apply here.", color=MUTED)
+    if not_eval:
+        _p(pdf, f"{len(not_eval)} uploaded report(s) not evaluated - no scan metadata "
+                "(unreadable/empty file, or a run saved before guardrails existed). This is NOT a pass.", color=MUTED)
+    if not (flagged or passed or na or not_eval):
+        _p(pdf, "No reports were security-evaluated in this run.", color=MUTED)
 
     # --- Attack paths ---
     if graph.get("paths"):

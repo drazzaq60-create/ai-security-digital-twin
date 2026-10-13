@@ -95,7 +95,42 @@ tolerate bad certs and fall back https→http.
 ---
 
 ## 4. Where we are **right now**
-- **Feature-complete and polished.** Runs locally. **All code committed + pushed to `main`.**
+
+### Latest work (branch `claude/relaxed-cray-eu8kfx`, Oct 2026) — Web URL scan hardening + unified report
+A focused pass on the **Web App Scan** section, verified with a real Nmap run end-to-end:
+- **App boots without a key.** `llm.py` now lazy-inits the Gemini client (was created at import
+  → crashed the whole backend if `GEMINI_API_KEY` was unset). Non-LLM features run with no key.
+- **Live tools default ON locally, OFF on a public host.** New `runtime_env.py` detects hosting
+  platforms (SPACE_ID/RENDER/RAILWAY/VERCEL/…); `ENABLE_LIVE_TOOLS` + `SENTINEL_ALLOW_PRIVATE_TARGETS`
+  now default ON for local dev, OFF on deploy. Explicit `0/1` still overrides. Startup banner prints
+  the state + which scanner binaries were found. **No flag needed on a dev machine anymore.**
+- **SSRF parity.** The quick scan (`live_scan.py`) now uses the same SSRF guard as the tool path
+  (blocks private/loopback/metadata on a public deploy; localhost allowed locally).
+- **Honest failures.** A tool that errors (e.g. Nmap without Npcap on Windows → exits ~1s, no output)
+  is now reported as a **failed** report with the real stderr — never a fake "100% risk-free". The
+  Overview shows a loud warning banner when any scan failed.
+- **Guardrails panel is honest.** Web/tool scans now show **"not applicable"** (no untrusted text
+  reaches the LLM) instead of a misleading "not evaluated / not a pass". Same fix in the PDF export.
+- **🆕 Unified LLM report (the big one).** A multi-tool web scan now keeps **each tool's full raw
+  output** and feeds all findings + raw output to the LLM, which writes **one comprehensive
+  pentest-style report** (exec summary, risk rating, scope, key-findings table, detailed analysis,
+  attack paths, remediation roadmap). Rendered in the Overview as "📋 Security Report" (new inline
+  Markdown renderer) with a collapsible **"🧪 Appendix — raw tool output"** per tool. Raw output is
+  hardened (guardrails L2) since it's attacker-influenced. Backend: `tool_report.py` +
+  rewritten `run_tool_job` (returns one merged report: findings + `report_md` + `scan.raw`).
+  Without a key it degrades gracefully (findings still shown, report section hidden).
+  - Files touched: `llm.py`, `runtime_env.py` (new), `tool_scan.py`, `target_client.py`,
+    `live_scan.py`, `tool_report.py` (new), `api.py` (startup banner), `report_export.py`,
+    `frontend/app/page.js`, `frontend/app/globals.css`.
+  - **Verified in-sandbox:** real Nmap scan → merged report + raw appendix; failed-tool path;
+    SSRF block on public mode; frontend builds clean; PDF export with report_md; saved-run reload.
+    **Not yet visually confirmed in a browser:** the Markdown report render (no `GEMINI_API_KEY`
+    in the sandbox to generate a live report, and the headless screenshot run was flaky) — the
+    data path + build are verified, so this is low-risk, but eyeball it on a keyed local run.
+
+### Still true
+- **Feature-complete and polished.** Runs locally. **Latest work pushed to `claude/relaxed-cray-eu8kfx`**
+  (older milestones on `main`).
 - **NOT deployed** — there is no public URL yet. (This is the main thing left.)
 - The built-in web scan and **both** AI red-team modes (simulated + live-endpoint) work without
   any external tools.
@@ -134,7 +169,10 @@ redteam_eval*.py    L4 evals (detector recall/FP; naive-vs-hardened attack-succe
 scoring.py          deterministic 0-100 security score (shared everywhere)
 store.py / db.py    persistence (disk + Postgres/Supabase, swappable)
 live_scan.py        built-in lightweight web scan (TLS/headers/ports, stdlib only)
-tool_scan.py        REAL external scanners (nmap/nuclei/nikto/sslscan/wapiti/whatweb/testssl)
+tool_scan.py        REAL external scanners (nmap/nuclei/nikto/sslscan/wapiti/whatweb/testssl);
+                    run_tool_job now returns ONE merged report (findings + report_md + raw appendix)
+tool_report.py      LLM synthesis of findings + raw tool output -> one comprehensive pentest report
+runtime_env.py      local-dev vs public-deploy detection (defaults ENABLE_LIVE_TOOLS / allow-private)
 redcell/            vendored autonomous red-team agent (agent/attacks/judge/llm/models)
 ai_scan.py          runs RedCell as a job, maps report -> findings, captures transcript
 jobs.py             in-memory background-job registry
