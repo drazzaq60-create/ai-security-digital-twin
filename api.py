@@ -46,6 +46,23 @@ app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
 
+
+@app.on_event("startup")
+def _startup_banner():
+    """Print the live-tool state on boot so 'why aren't my scanners showing' is never a mystery."""
+    from runtime_env import is_public_deploy
+    from tool_scan import list_tools
+    cat = list_tools()
+    mode = "public deploy" if is_public_deploy() else "local dev"
+    installed = [t["id"] for t in cat["tools"] if t["installed"]]
+    missing = [t["id"] for t in cat["tools"] if not t["installed"]]
+    print(f"[sentinel] environment: {mode}")
+    print(f"[sentinel] real scanners: {'ENABLED' if cat['enabled'] else 'disabled'} "
+          f"(set ENABLE_LIVE_TOOLS=0/1 to override)")
+    print(f"[sentinel]   installed & ready: {', '.join(installed) or 'none'}")
+    if cat["enabled"] and missing:
+        print(f"[sentinel]   not found on PATH: {', '.join(missing)}")
+
 # --- Abuse / cost guard (important for a PUBLIC deploy of a tool that makes outbound
 # requests and spends an API quota). Two layers, both env-configurable:
 #   1. Optional access gate: set SENTINEL_ACCESS_CODE to require an X-Access-Code header

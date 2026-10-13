@@ -2,9 +2,11 @@
 # Runs REAL security scanners (Nmap, Nuclei, Nikto, sslscan) as live scans and parses their
 # output into Sentinel's finding shape. These are powerful tools, so this is gated hard:
 #
-#   * OFF unless ENABLE_LIVE_TOOLS=1  (so a public deploy never becomes an open scan proxy).
+#   * ON by default for local dev, OFF on a public host (so a public deploy never becomes an
+#     open scan proxy); ENABLE_LIVE_TOOLS=0/1 overrides. See runtime_env.py.
 #   * only tools actually installed on the host are offered (auto-detected).
-#   * the target is SSRF-guarded (no private/internal hosts) unless SENTINEL_ALLOW_PRIVATE_TARGETS=1.
+#   * the target is SSRF-guarded (no private/internal hosts) on public hosts; localhost is
+#     allowed locally by default (SENTINEL_ALLOW_PRIVATE_TARGETS=0/1 overrides).
 #   * each run has a hard timeout.
 #
 # Intended for LOCAL / self-hosted use (and screen-recorded demos). On the hosted demo the
@@ -19,8 +21,11 @@ import xml.etree.ElementTree as ET
 
 from target_client import guard_url, TargetError
 from deterministic_ingest import parse_deterministic
+from runtime_env import env_flag, is_public_deploy
 
-ENABLED = os.getenv("ENABLE_LIVE_TOOLS") == "1"
+# Default ON for local dev, OFF on a public host (so a public deploy never becomes an
+# open scan proxy). An explicit ENABLE_LIVE_TOOLS=0/1 always overrides.
+ENABLED = env_flag("ENABLE_LIVE_TOOLS", default=not is_public_deploy())
 TIMEOUT = int(os.getenv("TOOL_TIMEOUT", "180"))  # seconds per tool run
 
 

@@ -5,7 +5,8 @@
 # SECURITY: the endpoint URL is user-supplied and the backend fetches it, which is a classic
 # SSRF vector on a public instance. _guard_url() blocks non-http(s) schemes and any host that
 # resolves to a private / loopback / link-local / reserved address (incl. cloud metadata).
-# Set SENTINEL_ALLOW_PRIVATE_TARGETS=1 ONLY for local dev to allow localhost targets.
+# Private/loopback targets are allowed by default for local dev and blocked on a public
+# host; an explicit SENTINEL_ALLOW_PRIVATE_TARGETS=0/1 always overrides.
 
 import ipaddress
 import json
@@ -15,7 +16,9 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
-ALLOW_PRIVATE = os.getenv("SENTINEL_ALLOW_PRIVATE_TARGETS") == "1"
+from runtime_env import env_flag, is_public_deploy
+
+ALLOW_PRIVATE = env_flag("SENTINEL_ALLOW_PRIVATE_TARGETS", default=not is_public_deploy())
 TIMEOUT = 25          # seconds per request to the target
 MAX_REPLY = 4000      # cap the target's reply length
 
