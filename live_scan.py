@@ -22,6 +22,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
+from target_client import guard_url, TargetError  # shared SSRF guard (same as the real-tool path)
+
 USER_AGENT = "Sentinel-Security-Scanner/0.5 (+authorized-assessment)"
 CONNECT_TIMEOUT = 3.0     # per TCP connect
 HTTP_TIMEOUT = 8.0        # per HTTP request
@@ -200,6 +202,13 @@ def run_web_scan(target: str, do_ports: bool = True) -> dict:
     only for an unparseable target."""
     started = time.time()
     scheme, host, port, base = _normalize(target)
+
+    # SSRF guard: same policy as the real-tool path — blocks private/loopback/metadata
+    # targets on a public deploy, allowed locally (SENTINEL_ALLOW_PRIVATE_TARGETS / runtime_env).
+    try:
+        guard_url("http://" + host)
+    except TargetError as e:
+        raise ValueError(str(e))
 
     findings = []
     checks = []

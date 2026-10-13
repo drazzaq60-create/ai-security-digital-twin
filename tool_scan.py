@@ -263,7 +263,10 @@ def run_tool(tool_id, target):
             except OSError: pass
 
     findings = tool["parse"](output, _host_of(target))
-    return findings, {"tool": tool_id, "tool_name": tool["name"], "returncode": proc.returncode}
+    return findings, {"tool": tool_id, "tool_name": tool["name"],
+                      "returncode": proc.returncode,
+                      "stderr": (proc.stderr or "").strip()[:600],
+                      "empty_output": not (output or "").strip()}
 
 
 def run_tool_job(job_id, tools, target):
@@ -296,16 +299,38 @@ def run_tool_job(job_id, tools, target):
                 continue
             _log(f"Running {t['name']} …")
             try:
-                findings, _ = run_tool(tid, target)
+                findings, meta = run_tool(tid, target)
             except Exception as e:
-                _log(f"  {t['name']} skipped: {e}")
+                # Couldn't even launch (missing binary, blocked target): a failed report,
+                # not a silent omission — otherwise the scan looks clean when it never ran.
+                _log(f"  {t['name']} could not run: {e}")
+                ran.append(t["name"])
+                reports.append({
+                    "name": f"{t['name']} — {host}", "findings": [], "fixes": [],
+                    "false_positives": [], "status": "failed", "error": str(e)[:500],
+                    "security": None, "parser": f"tool:{tid}",
+                    "scan": {"target": target, "tool": tid, "tool_name": t["name"]},
+                })
                 continue
             ran.append(t["name"]); total += len(findings)
-            _log(f"  {t['name']}: {len(findings)} finding(s)" if findings else f"  {t['name']}: no findings")
+
+            # A tool that produced no findings AND exited with an error (or emitted nothing)
+            # has FAILED — do not report that as a clean 100% result. The classic case on
+            # Windows is Nmap without Npcap: it exits in ~1s with an error and zero output.
+            rc = meta.get("returncode")
+            if not findings and (meta.get("empty_output") or (rc not in (0, None))):
+                err = meta.get("stderr") or f"{t['name']} exited with code {rc} and produced no parseable output."
+                _log(f"  ⚠ {t['name']} failed (exit {rc}): {err.splitlines()[0][:160] if err else ''}")
+                status, rep_err = "failed", err[:500]
+            else:
+                _log(f"  {t['name']}: {len(findings)} finding(s)" if findings else f"  {t['name']}: no findings (clean)")
+                if meta.get("stderr"):
+                    _log(f"    note ({t['name']}): {meta['stderr'].splitlines()[0][:160]}")
+                status, rep_err = ("ok" if findings else "empty"), ""
             reports.append({
                 "name": f"{t['name']} — {host}",
                 "findings": findings, "fixes": [], "false_positives": [],
-                "status": "ok" if findings else "empty", "error": "", "security": None,
+                "status": status, "error": rep_err, "security": None,
                 "parser": f"tool:{tid}",
                 "scan": {"target": target, "tool": tid, "tool_name": t["name"]},
             })

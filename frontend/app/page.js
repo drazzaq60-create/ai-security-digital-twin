@@ -1062,7 +1062,7 @@ export default function Home() {
           <p className="field-hint">
             {webEngine === "quick"
               ? "Fast, safe, built-in checks — no external tools needed."
-              : "Choose any combination below. All selected tools run against this one URL and their findings are merged."}
+              : "Choose any combination below. Each tool runs against this URL and gets its own findings section, then Sentinel correlates across them."}
           </p>
 
           {webEngine === "tools" && (
@@ -1279,6 +1279,14 @@ export default function Home() {
         <div className="empty">No analysis yet. <button className="linklike" onClick={() => setNav("scan")}>Start a scan →</button></div>
       )}
 
+      {/* A failed scan must never look like a clean pass — call it out loudly. */}
+      {nav === "overview" && failedCount > 0 && (
+        <div className="err-box" style={{ marginBottom: 14 }}>
+          ⚠ {failedCount} {failedCount === 1 ? "scan" : "scans"} did not complete{okReports.length === 0 ? " — no security assessment was produced, so this is NOT a clean result" : ""}.
+          {" "}See the per-report details below for the exact error (often a tool that isn’t installed or can’t run on this OS).
+        </div>
+      )}
+
       {nav === "overview" && reports.length > 0 && (
         <div className="stat-row">
           <Stat n={reports.length} label="Reports" />
@@ -1317,7 +1325,7 @@ export default function Home() {
                       <tr key={i}>
                         <td>{f.name}</td>
                         <td className="mono">{f.sha256 ? f.sha256.slice(0, 12) + "…" : "—"}</td>
-                        <td>{f.parser ? (f.parser.startsWith("deterministic") ? f.parser.split(":")[1] + " (deterministic)" : "LLM") : "—"}</td>
+                        <td>{parserLabel(f.parser)}</td>
                         <td>{f.findings} findings</td>
                         <td className={f.security_evaluated ? "prov-ok" : "prov-na"}>
                           {f.security_evaluated ? "✓ security checked" : "• not checked"}
@@ -1694,6 +1702,16 @@ const SEV_COLOR = { Critical: "#ef4444", High: "#f87171", Medium: "#eab308", Low
 
 const MODULE_LABEL = { ai: "AI Red-Team", web: "Web Scan", upload: "Upload" };
 function scoreTone(s) { return s >= 80 ? "ok" : s >= 40 ? "warn" : "bad"; }
+
+// Human label for a report's parser provenance (deterministic parser / real scanner /
+// built-in live scan / LLM fallback).
+function parserLabel(parser) {
+  if (!parser) return "—";
+  if (parser.startsWith("deterministic")) return parser.split(":")[1] + " (deterministic)";
+  if (parser.startsWith("tool:")) return parser.split(":")[1] + " (scanner)";
+  if (parser.startsWith("live")) return "live web scan";
+  return "LLM";
+}
 
 // AI red-team attack categories — keys must match the backend AttackCategory enum.
 const AI_CATEGORIES = [
