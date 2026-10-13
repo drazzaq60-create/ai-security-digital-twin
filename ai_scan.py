@@ -134,6 +134,34 @@ def run_ai_scan(job_id, system_prompt, target_name, categories, budget, max_per_
         if safe_endpoint:
             rep["scan"]["endpoint"] = safe_endpoint.get("url")
 
+        # Comprehensive, professional LLM-written report (the headline deliverable), built
+        # from the full attack transcript — same role tool_report plays for the web scan.
+        # A failure here never sinks the scan: findings + transcript are already captured.
+        def _append_log(msg):
+            cur = jobs.get(job_id) or {}
+            log = list(cur.get("log") or [])
+            log.append(msg)
+            jobs.set_log(job_id, log)
+
+        try:
+            _append_log("Synthesising comprehensive report (LLM)…")
+            from redteam_report import build_redteam_report
+            rep["report_md"] = build_redteam_report(
+                target_name=target_name, mode=mode,
+                endpoint_url=(safe_endpoint or {}).get("url"),
+                judge_policy=judge_rules,
+                categories_tested=[c.value for c in cats],
+                transcript=transcript, findings=all_findings,
+                total_attacks=report.total_attacks,
+                successful_attacks=report.successful_attacks,
+                overall_risk=report.overall_risk.value,
+                score=sc["score"],
+            )
+            _append_log("  ✓ comprehensive report generated")
+        except Exception as e:
+            rep["report_md"] = ""
+            _append_log(f"  ⚠ LLM report unavailable: {e}")
+
         record = {
             "_id": new_id(), "_created": time.time(),
             "module": "ai", "target": target_name,
